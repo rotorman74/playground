@@ -8,7 +8,7 @@
 'use strict';
 
 // Bump this on each release (auto-incremented — see CLAUDE.md).
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.5.1';
 const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -210,7 +210,10 @@ function recalculate() {
     );
   }
 
-  // Fastest speed (earliest arrival) first.
+  // Fastest speed (earliest arrival) first. Each date part (weekday, day of
+  // month, month) is shown only when it changes from the row above.
+  let prevDow = null;
+  let prevDom = null;
   let prevMonthKey = null;
   for (const speed of speeds.slice().reverse()) {
     const hours = distance / speed;
@@ -222,11 +225,17 @@ function recalculate() {
     });
 
     const dow = eta.toLocaleDateString(undefined, { weekday: 'short' });
+    const dom = eta.getDate();
     const monthKey = `${eta.getFullYear()}-${eta.getMonth()}`;
-    const showMonth = monthKey !== prevMonthKey; // only when the month changes
+
+    const parts = [];
+    if (dow !== prevDow) parts.push(dow);
+    if (dom !== prevDom) parts.push(String(dom));
+    if (monthKey !== prevMonthKey) parts.push(eta.toLocaleDateString(undefined, { month: 'short' }));
+    prevDow = dow;
+    prevDom = dom;
     prevMonthKey = monthKey;
-    const month = showMonth ? ' ' + eta.toLocaleDateString(undefined, { month: 'short' }) : '';
-    const dateLabel = `${dow} ${eta.getDate()}${month}`;
+    const dateLabel = parts.join(' ');
 
     const tr = document.createElement('tr');
     tr.innerHTML = `
