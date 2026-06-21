@@ -8,7 +8,7 @@
 'use strict';
 
 // Bump this on each release (auto-incremented — see CLAUDE.md).
-const APP_VERSION = '1.7.1';
+const APP_VERSION = '1.8.0';
 const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -280,34 +280,56 @@ async function ensureWind(samples) {
   if (!need.length) return;
   const chunk = need.slice(0, 100);
 
+  const KMH_TO_KN = 0.539957;
   try {
     const lats = chunk.map((s) => s.lat.toFixed(4)).join(',');
     const lons = chunk.map((s) => s.lng.toFixed(4)).join(',');
     const times = chunk.map((s) => +new Date(s.date));
     const sd = new Date(Math.min(...times)).toISOString().slice(0, 10);
     const ed = new Date(Math.max(...times)).toISOString().slice(0, 10);
-    const url =
+    const windUrl =
       `https://api.open-meteo.com/v1/ecmwf?latitude=${lats}&longitude=${lons}` +
       `&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=kn` +
       `&timezone=UTC&start_date=${sd}&end_date=${ed}`;
-    const res = await fetch(url);
-    const json = await res.json();
-    const arr = Array.isArray(json) ? json : [json];
+    const marineUrl =
+      `https://marine-api.open-meteo.com/v1/marine?latitude=${lats}&longitude=${lons}` +
+      `&hourly=ocean_current_velocity,ocean_current_direction` +
+      `&timezone=UTC&start_date=${sd}&end_date=${ed}`;
+
+    const grab = (u) => fetch(u).then((r) => r.json()).catch(() => null);
+    const [windJson, marineJson] = await Promise.all([grab(windUrl), grab(marineUrl)]);
+    const windArr = windJson ? (Array.isArray(windJson) ? windJson : [windJson]) : [];
+    const marineArr = marineJson ? (Array.isArray(marineJson) ? marineJson : [marineJson]) : [];
 
     chunk.forEach((s, i) => {
       const k = windKey(s.lat, s.lng, s.date);
-      const loc = arr[i];
+      const hour = isoHourUTC(s.date);
       let val = null;
-      if (loc && loc.hourly && loc.hourly.time) {
-        const idx = loc.hourly.time.indexOf(isoHourUTC(s.date));
+
+      const wl = windArr[i];
+      if (wl && wl.hourly && wl.hourly.time) {
+        const idx = wl.hourly.time.indexOf(hour);
         if (idx >= 0) {
           val = {
-            speed: loc.hourly.wind_speed_10m[idx],
-            dir: loc.hourly.wind_direction_10m[idx],
-            gust: loc.hourly.wind_gusts_10m ? loc.hourly.wind_gusts_10m[idx] : null,
+            speed: wl.hourly.wind_speed_10m[idx],
+            dir: wl.hourly.wind_direction_10m[idx],
+            gust: wl.hourly.wind_gusts_10m ? wl.hourly.wind_gusts_10m[idx] : null,
+            cur: null,
           };
         }
       }
+
+      const ml = marineArr[i];
+      if (ml && ml.hourly && ml.hourly.time) {
+        const idx = ml.hourly.time.indexOf(hour);
+        const v = idx >= 0 ? ml.hourly.ocean_current_velocity[idx] : null;
+        const d = idx >= 0 ? ml.hourly.ocean_current_direction[idx] : null;
+        if (v != null && d != null) {
+          if (!val) val = { speed: null, dir: null, gust: null, cur: null };
+          val.cur = { speed: v * KMH_TO_KN, dir: d }; // dir = set (toward), km/h → kn
+        }
+      }
+
       windCache.set(k, val);
       windPending.delete(k);
     });
@@ -317,7 +339,7 @@ async function ensureWind(samples) {
       windPending.delete(windKey(s.lat, s.lng, s.date));
     });
   }
-  windEpoch++; // new wind data → expanded details should rebuild once
+  windEpoch++; // new data → expanded details should rebuild once
   scheduleRerender();
 }
 
@@ -391,30 +413,47 @@ function buildDetailRow(speed, distance, departure) {
     let windCell = '<span class="muted">…</span>';
     let trueCell = '';
     let appCell = '';
+    let curCell = '';
     if (w === null) {
       windCell = '<span class="muted">n/a</span>';
-    } else if (w) {
-      const flow = (w.dir + 180) % 360;                   // true wind blows toward
-      const rel = ((w.dir - s.course + 540) % 360) - 180; // true wind-from rel. to bow
-      const relFlow = ((flow - s.course) % 360 + 360) % 360;
-      const trueSpd = w.gust != null
-        ? `${speedNum(w.speed)}-${speedNum(w.gust)}`
-        : speedNum(w.speed);
-      windCell =
-        `${arrow(flow, 'Wind blowing toward', windSpeedColor(w.speed))} ` +
-        `${Math.round(w.dir)}° · ${trueSpd} kn`;
-      trueCell =
-        `${arrow(relFlow, 'True wind relative to boat', relAngleColor(Math.abs(rel)))} ` +
-        `${Math.abs(Math.round(rel))}°${sideLabel(rel)}`;
+    } else {
+      if (w.speed != null) {
+        const flow = (w.dir + 180) % 360;                   // true wind blows toward
+        const rel = ((w.dir - s.course + 540) % 360) - 180; // true wind-from rel. to bow
+        const relFlow = ((flow - s.course) % 360 + 360) % 360;
+        const trueSpd = w.gust != null
+          ? `${speedNum(w.speed)}-${speedNum(w.gust)}`
+          : speedNum(w.speed);
+        windCell =
+          `${arrow(flow, 'Wind blowing toward', windSpeedColor(w.speed))} ` +
+          `${Math.round(w.dir)}° · ${trueSpd} kn`;
+        trueCell =
+          `${arrow(relFlow, 'True wind relative to boat', relAngleColor(Math.abs(rel)))} ` +
+          `${Math.abs(Math.round(rel))}°${sideLabel(rel)}`;
 
-      const app = apparentWind(w.speed, w.dir, speed, s.course);
-      const appRelFlow = ((app.flow - s.course) % 360 + 360) % 360;
-      const appSpd = w.gust != null
-        ? `${speedNum(app.speed)}-${speedNum(apparentWind(w.gust, w.dir, speed, s.course).speed)}`
-        : speedNum(app.speed);
-      appCell =
-        `${arrow(appRelFlow, 'Apparent wind relative to boat', relAngleColor(Math.abs(app.rel)))} ` +
-        `${Math.abs(Math.round(app.rel))}°${sideLabel(app.rel)} · ${appSpd} kn`;
+        const app = apparentWind(w.speed, w.dir, speed, s.course);
+        const appRelFlow = ((app.flow - s.course) % 360 + 360) % 360;
+        const appSpd = w.gust != null
+          ? `${speedNum(app.speed)}-${speedNum(apparentWind(w.gust, w.dir, speed, s.course).speed)}`
+          : speedNum(app.speed);
+        appCell =
+          `${arrow(appRelFlow, 'Apparent wind relative to boat', relAngleColor(Math.abs(app.rel)))} ` +
+          `${Math.abs(Math.round(app.rel))}°${sideLabel(app.rel)} · ${appSpd} kn`;
+      } else {
+        windCell = '<span class="muted">n/a</span>';
+      }
+
+      if (w.cur) {
+        // Current direction is the set (toward). Component along the course
+        // is favourable (+) or adverse (−).
+        const along = w.cur.speed * Math.cos((w.cur.dir - s.course) * Math.PI / 180);
+        const eff = `${along >= 0 ? '+' : '−'}${Math.abs(along).toFixed(1)}`;
+        const effColor = along >= 0 ? '#2bb24a' : '#e23b3b';
+        curCell =
+          `${arrow(w.cur.dir, 'Current set (toward)', '#3bd6c6')} ` +
+          `${Math.round(w.cur.dir)}° · ${w.cur.speed.toFixed(1)} kn ` +
+          `<span style="color:${effColor}">${eff}</span>`;
+      }
     }
 
     rows +=
@@ -422,13 +461,14 @@ function buildDetailRow(speed, distance, departure) {
       `<td>${arrow(s.course, 'Course')} ${Math.round(s.course)}°</td>` +
       `<td>${windCell}</td>` +
       `<td>${trueCell}</td>` +
-      `<td>${appCell}</td></tr>`;
+      `<td>${appCell}</td>` +
+      `<td>${curCell}</td></tr>`;
   }
 
   td.innerHTML =
     `<div class="wind-scroll"><table class="wind-table"><thead><tr>` +
     `<th>day · time</th><th>course</th><th>wind (true)</th>` +
-    `<th>true ∠ (bow↑)</th><th>app ∠ (bow↑)</th>` +
+    `<th>true ∠ (bow↑)</th><th>app ∠ (bow↑)</th><th>current (set)</th>` +
     `</tr></thead><tbody>${rows}</tbody></table></div>`;
   tr.appendChild(td);
   return tr;

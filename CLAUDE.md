@@ -15,9 +15,11 @@ speeds and shows nights at sea.
 - Distance is either entered manually or measured from a **multi-leg route**
   built on the map (start/live position + waypoints; total = sum of
   great-circle legs)
-- Each speed row can be expanded into a 3-hourly timeline of position, course
-  and **ECMWF wind** (fetched client-side from Open-Meteo's `/v1/ecmwf`
-  endpoint, knots), including wind angle relative to the boat (bow up)
+- Each speed row can be expanded into a 3-hourly timeline of position, course,
+  **ECMWF wind** (fetched client-side from Open-Meteo's `/v1/ecmwf` endpoint,
+  knots; true + apparent, gusts) and **ocean currents** (set/drift from
+  Open-Meteo's Marine API, with along-course effect), including wind angle
+  relative to the boat (bow up)
 - User settings persist to `localStorage` (`sailing-eta-settings-v2`)
 
 ## Results table
