@@ -19,21 +19,18 @@ speeds and shows nights at sea.
 
 ## Results table
 
-Columns (no header row, compact single-line): **speed** (number only, 1
-decimal), **nights** (calendar midnights crossed to arrival), **arrival time**
-(HH:MM), **day of week** of arrival.
+Columns (no header row, compact single-line), ordered **fastest speed first**:
+**speed** (number only, 1 decimal), **nights** (calendar midnights crossed to
+arrival), **arrival time** (HH:MM), **date** (weekday + day of month; the short
+month name is appended only when the month differs from the row above).
 
 ## Releases & versioning
 
-The app version is shown in the footer and defined as `APP_VERSION` in
-`app.js`.
+The app version is shown in the footer and defined as `APP_VERSION` in `app.js`.
 
-**IMPORTANT: On every release (any user-visible change being shipped), ASK THE
-USER for the new version number before committing.** Do not bump it yourself.
-Once they give it:
-
-1. Update `APP_VERSION` in `app.js` to the number they provide.
-2. Commit and deploy.
+**Bump `APP_VERSION` automatically on every release — do NOT ask the user.**
+Increment the patch number for fixes/small tweaks, the minor number for new
+user-facing features. Then commit and deploy.
 
 ## Deployment
 

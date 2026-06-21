@@ -7,8 +7,8 @@
 
 'use strict';
 
-// Bump this on each release (see CLAUDE.md — ask the user for the new number).
-const APP_VERSION = '1.4.0';
+// Bump this on each release (auto-incremented — see CLAUDE.md).
+const APP_VERSION = '1.5.0';
 const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -210,7 +210,9 @@ function recalculate() {
     );
   }
 
-  for (const speed of speeds) {
+  // Fastest speed (earliest arrival) first.
+  let prevMonthKey = null;
+  for (const speed of speeds.slice().reverse()) {
     const hours = distance / speed;
     const eta = new Date(departure.getTime() + hours * 3600 * 1000);
     const nights = countNights(departure, eta);
@@ -218,14 +220,20 @@ function recalculate() {
       hour: '2-digit',
       minute: '2-digit',
     });
+
     const dow = eta.toLocaleDateString(undefined, { weekday: 'short' });
+    const monthKey = `${eta.getFullYear()}-${eta.getMonth()}`;
+    const showMonth = monthKey !== prevMonthKey; // only when the month changes
+    prevMonthKey = monthKey;
+    const month = showMonth ? ' ' + eta.toLocaleDateString(undefined, { month: 'short' }) : '';
+    const dateLabel = `${dow} ${eta.getDate()}${month}`;
 
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td class="speed-cell">${speed.toFixed(1)}</td>
       <td class="nights-cell">${nights}</td>
       <td class="arr-cell">${arrivalTime}</td>
-      <td class="dow-cell">${dow}</td>`;
+      <td class="dow-cell">${dateLabel}</td>`;
 
     if (current !== null) {
       const strength = Math.max(0, 1 - Math.abs(speed - current) / HIGHLIGHT_SPAN);
