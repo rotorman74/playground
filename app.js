@@ -8,7 +8,7 @@
 'use strict';
 
 // Bump this on each release (auto-incremented — see CLAUDE.md).
-const APP_VERSION = '1.9.0';
+const APP_VERSION = '1.10.0';
 const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -297,7 +297,7 @@ async function ensureWind(samples) {
       `&timezone=UTC&start_date=${sd}&end_date=${ed}`;
     const capeUrl =
       `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}` +
-      `&hourly=cape&timezone=UTC&start_date=${sd}&end_date=${ed}`;
+      `&hourly=cape,precipitation&timezone=UTC&start_date=${sd}&end_date=${ed}`;
 
     const grab = (u) => fetch(u).then((r) => r.json()).catch(() => null);
     const [windJson, marineJson, capeJson] = await Promise.all([
@@ -312,7 +312,7 @@ async function ensureWind(samples) {
       const k = windKey(s.lat, s.lng, s.date);
       const hour = isoHourUTC(s.date);
       let val = null;
-      const ensure = () => (val = val || { speed: null, dir: null, gust: null, cur: null, cape: null });
+      const ensure = () => (val = val || { speed: null, dir: null, gust: null, cur: null, cape: null, rain: null });
 
       const wl = windArr[i];
       if (wl && wl.hourly && wl.hourly.time) {
@@ -339,8 +339,12 @@ async function ensureWind(samples) {
       const cl = capeArr[i];
       if (cl && cl.hourly && cl.hourly.time) {
         const idx = cl.hourly.time.indexOf(hour);
-        const c = idx >= 0 ? cl.hourly.cape[idx] : null;
-        if (c != null) { ensure(); val.cape = c; }
+        if (idx >= 0) {
+          const c = cl.hourly.cape ? cl.hourly.cape[idx] : null;
+          const r = cl.hourly.precipitation ? cl.hourly.precipitation[idx] : null;
+          if (c != null) { ensure(); val.cape = c; }
+          if (r != null) { ensure(); val.rain = r; }
+        }
       }
 
       windCache.set(k, val);
@@ -412,6 +416,15 @@ function capeColor(c) {
   return '#e23b3b';                // strong
 }
 
+// Rain (mm/h) colour.
+function rainColor(mm) {
+  if (mm < 0.1) return '#5a6b7d';  // dry
+  if (mm < 1) return '#6cc0ff';    // light
+  if (mm < 4) return '#3b82f6';    // moderate
+  if (mm < 10) return '#ff9f1c';   // heavy
+  return '#e23b3b';                // very heavy
+}
+
 // Build the expandable per-speed wind detail row.
 function buildDetailRow(speed, distance, departure) {
   const samples = sampleRoute(speed, distance, departure);
@@ -436,6 +449,7 @@ function buildDetailRow(speed, distance, departure) {
     let appCell = '';
     let curCell = '';
     let capeCell = '';
+    let rainCell = '';
     if (w === null) {
       windCell = '<span class="muted">n/a</span>';
     } else {
@@ -480,6 +494,9 @@ function buildDetailRow(speed, distance, departure) {
       if (w.cape != null) {
         capeCell = `<span style="color:${capeColor(w.cape)};font-weight:700">${Math.round(w.cape)}</span>`;
       }
+      if (w.rain != null) {
+        rainCell = `<span style="color:${rainColor(w.rain)};font-weight:700">${w.rain.toFixed(1)}</span>`;
+      }
     }
 
     rows +=
@@ -489,14 +506,15 @@ function buildDetailRow(speed, distance, departure) {
       `<td>${trueCell}</td>` +
       `<td>${appCell}</td>` +
       `<td>${curCell}</td>` +
-      `<td>${capeCell}</td></tr>`;
+      `<td>${capeCell}</td>` +
+      `<td>${rainCell}</td></tr>`;
   }
 
   td.innerHTML =
     `<div class="wind-scroll"><table class="wind-table"><thead><tr>` +
-    `<th>day · time</th><th>course</th><th>wind true (kn)</th>` +
-    `<th>true ∠ (bow↑)</th><th>app ∠ · kn</th><th>current set · kn</th>` +
-    `<th>CAPE</th>` +
+    `<th>day · time</th><th>course</th><th>wind</th>` +
+    `<th>true</th><th>app</th><th>current</th>` +
+    `<th>CAPE</th><th>rain</th>` +
     `</tr></thead><tbody>${rows}</tbody></table></div>`;
   tr.appendChild(td);
   return tr;
