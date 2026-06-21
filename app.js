@@ -16,6 +16,7 @@ const state = {
   start: null,                // { lat, lng }
   dest: null,                 // { lat, lng }
   watchId: null,              // geolocation watch handle
+  gpsCentered: false,         // have we recentered the map on the first GPS fix?
 };
 
 // ── DOM ────────────────────────────────────────────────────────────
@@ -221,6 +222,14 @@ function setStart(pt, { fromGps = false } = {}) {
     startMarker.setLatLng(pt);
   }
   startMarker.dragging[state.useCurrent ? 'disable' : 'enable']();
+
+  // On the first GPS fix, recenter so the user can see themselves and click a
+  // destination nearby. Only do it once so we don't fight manual panning.
+  if (fromGps && !state.dest && !state.gpsCentered) {
+    map.setView(pt, 9);
+    state.gpsCentered = true;
+  }
+
   afterPointChange(fromGps);
 }
 
@@ -366,8 +375,12 @@ function setupInputs() {
     els.startLat.disabled = state.useCurrent;
     els.startLng.disabled = state.useCurrent;
     if (startMarker) startMarker.dragging[state.useCurrent ? 'disable' : 'enable']();
-    if (state.useCurrent) startWatchingLocation();
-    else stopWatchingLocation();
+    if (state.useCurrent) {
+      startWatchingLocation();
+    } else {
+      stopWatchingLocation();
+      state.gpsCentered = false; // recenter again next time GPS is enabled
+    }
   });
 
   // Default the future-time picker to one hour from now.
