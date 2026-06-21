@@ -8,7 +8,7 @@
 'use strict';
 
 // Bump this on each release (auto-incremented — see CLAUDE.md).
-const APP_VERSION = '1.6.1';
+const APP_VERSION = '1.6.2';
 const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -249,6 +249,8 @@ function renderCurrentSpeed(current) {
 // ── Wind (ECMWF via Open-Meteo) ────────────────────────────────────
 const windCache = new Map();   // key -> { speed, dir, gust } | null (unavailable)
 const windPending = new Set();
+const detailCache = new Map(); // speed label -> { sig, node } (expanded wind detail)
+let windEpoch = 0;             // bumps when wind data changes, to refresh details
 let rerenderTimer = null;
 
 function isoHourUTC(date) {
@@ -315,6 +317,7 @@ async function ensureWind(samples) {
       windPending.delete(windKey(s.lat, s.lng, s.date));
     });
   }
+  windEpoch++; // new wind data → expanded details should rebuild once
   scheduleRerender();
 }
 
@@ -479,7 +482,20 @@ function recalculate() {
     }
     body.appendChild(tr);
 
-    if (isExpanded) body.appendChild(buildDetailRow(speed, distance, departure));
+    if (isExpanded) {
+      // Reuse the cached detail unless the route geometry, the 15-min time
+      // bucket, or the wind data changed — so it doesn't flicker on every
+      // GPS fix / periodic refresh.
+      const bucket = Math.floor(departure.getTime() / (15 * 60 * 1000));
+      const geom = state.waypoints.map((p) => `${p.lat.toFixed(3)},${p.lng.toFixed(3)}`).join(';');
+      const sig = `${label}|${bucket}|${geom}|${windEpoch}`;
+      let entry = detailCache.get(label);
+      if (!entry || entry.sig !== sig) {
+        entry = { sig, node: buildDetailRow(speed, distance, departure) };
+        detailCache.set(label, entry);
+      }
+      body.appendChild(entry.node);
+    }
   }
 
   saveSettings();
