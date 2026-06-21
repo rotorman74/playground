@@ -1,24 +1,23 @@
 /* Sailing ETA Calculator
  * - Computes ETA across a configurable range of speeds (knots)
- * - Distance from manual entry OR great-circle distance between two map points
+ * - Distance from manual entry OR a multi-leg route built on the map
  * - Departure "now" or a chosen future time
- * - Live recompute when the start point follows the device's current location
+ * - Live recompute when the route starts from the device's current location
  */
 
 'use strict';
 
 // Bump this on each release (see CLAUDE.md — ask the user for the new number).
-const APP_VERSION = '1.1.0';
-const STORAGE_KEY = 'sailing-eta-settings-v1';
+const APP_VERSION = '1.2.0';
+const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
 const state = {
   distanceMode: 'manual',     // 'manual' | 'map'
   departureMode: 'now',       // 'now' | 'future'
-  setPoint: 'dest',           // which point a map click sets: 'start' | 'dest'
-  useCurrent: false,          // start follows GPS
-  start: null,                // { lat, lng }
-  dest: null,                 // { lat, lng }
+  useCurrent: false,          // route starts from live GPS position
+  gps: null,                  // current GPS point { lat, lng } when useCurrent
+  waypoints: [],              // user-placed route points [{ lat, lng }, ...]
   watchId: null,              // geolocation watch handle
   gpsCentered: false,         // have we recentered the map on the first GPS fix?
 };
@@ -34,12 +33,14 @@ const els = {
   speedMin: $('speed-min'),
   speedMax: $('speed-max'),
   speedStep: $('speed-step'),
-  startLat: $('start-lat'),
-  startLng: $('start-lng'),
-  destLat: $('dest-lat'),
-  destLng: $('dest-lng'),
   useCurrent: $('use-current'),
   gpsStatus: $('gps-status'),
+  routeList: $('route-list'),
+  wpLat: $('wp-lat'),
+  wpLng: $('wp-lng'),
+  addPoint: $('add-point'),
+  undoPoint: $('undo-point'),
+  clearRoute: $('clear-route'),
   computedDistance: $('computed-distance'),
   resultsMeta: $('results-meta'),
   tableBody: document.querySelector('#eta-table tbody'),
@@ -61,6 +62,20 @@ function greatCircleNM(a, b) {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
   return 2 * EARTH_NM * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// ── Route helpers ──────────────────────────────────────────────────
+// The full ordered path: live GPS position (if used) followed by waypoints.
+function pathPoints() {
+  const pts = state.useCurrent && state.gps ? [state.gps] : [];
+  return pts.concat(state.waypoints);
+}
+
+function routeDistanceNM() {
+  const p = pathPoints();
+  let total = 0;
+  for (let i = 1; i < p.length; i++) total += greatCircleNM(p[i - 1], p[i]);
+  return total;
 }
 
 // ── Time helpers ───────────────────────────────────────────────────
@@ -89,8 +104,7 @@ function countNights(start, end) {
 // ── Core calculation ───────────────────────────────────────────────
 function getDistance() {
   if (state.distanceMode === 'map') {
-    if (state.start && state.dest) return greatCircleNM(state.start, state.dest);
-    return null;
+    return pathPoints().length >= 2 ? routeDistanceNM() : null;
   }
   const v = parseFloat(els.distance.value);
   return Number.isFinite(v) && v > 0 ? v : null;
@@ -129,14 +143,20 @@ function recalculate() {
   body.innerHTML = '';
 
   if (distance === null) {
-    body.innerHTML =
-      '<tr class="empty-row"><td colspan="4">Enter a distance, or set start &amp; destination on the map.</td></tr>';
+    const msg =
+      state.distanceMode === 'map'
+        ? 'Tap the map to build a route (start + at least one waypoint).'
+        : 'Enter a distance to see arrival times.';
+    body.innerHTML = `<tr class="empty-row"><td colspan="4">${msg}</td></tr>`;
     els.resultsMeta.textContent = '';
+    saveSettings();
     return;
   }
 
+  const legs = state.distanceMode === 'map' ? Math.max(0, pathPoints().length - 1) : 0;
   els.resultsMeta.textContent =
-    `${distance.toFixed(1)} NM · departing ${formatETA(departure)}`;
+    `${distance.toFixed(1)} NM${legs ? ` · ${legs} leg${legs > 1 ? 's' : ''}` : ''}` +
+    ` · departing ${formatETA(departure)}`;
 
   for (const speed of speedList()) {
     const hours = distance / speed;
@@ -161,7 +181,8 @@ function recalculate() {
 }
 
 // ── Map ────────────────────────────────────────────────────────────
-let map, startMarker, destMarker, routeLine;
+let map, routeLine, gpsMarker;
+let wpMarkers = [];
 
 function initMap() {
   map = L.map('map', { worldCopyJump: true }).setView([37.5, -25], 4);
@@ -176,108 +197,155 @@ function initMap() {
     }
   ).addTo(map);
 
-  // Optional place-name overlay so the satellite view stays legible.
+  // Place-name overlay so the satellite view stays legible.
   L.tileLayer(
     'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
     { maxZoom: 19, opacity: 0.9 }
   ).addTo(map);
 
+  // Each tap appends a point to the route.
   map.on('click', (e) => {
-    const pt = { lat: e.latlng.lat, lng: e.latlng.lng };
-    if (state.setPoint === 'start') {
-      if (state.useCurrent) return; // start is locked to GPS
-      setStart(pt);
-    } else {
-      setDest(pt);
-    }
+    state.waypoints.push({ lat: e.latlng.lat, lng: e.latlng.lng });
+    updateRoute({ fit: false });
   });
 }
 
-function markerIcon(kind) {
-  const color = kind === 'start' ? '#34d399' : '#2bb3ff';
+function routePin(color, label) {
   return L.divIcon({
-    className: 'pin',
-    html: `<div style="background:${color};width:18px;height:18px;border-radius:50% 50% 50% 0;
-           transform:rotate(-45deg);border:2px solid #04141f;box-shadow:0 2px 6px rgba(0,0,0,.5)"></div>`,
-    iconSize: [18, 18],
-    iconAnchor: [9, 18],
+    className: 'route-pin',
+    html: `<div class="route-pin-body" style="background:${color}"><span>${label}</span></div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 26],
   });
 }
 
-function setStart(pt, { fromGps = false } = {}) {
-  state.start = pt;
-  els.startLat.value = pt.lat.toFixed(6);
-  els.startLng.value = pt.lng.toFixed(6);
-
-  if (!startMarker) {
-    startMarker = L.marker(pt, {
-      icon: markerIcon('start'),
-      draggable: true,
-    }).addTo(map);
-    startMarker.on('dragend', () => {
-      if (state.useCurrent) return;
-      const ll = startMarker.getLatLng();
-      setStart({ lat: ll.lat, lng: ll.lng });
-    });
-    startMarker.bindTooltip('Start');
-  } else {
-    startMarker.setLatLng(pt);
-  }
-  startMarker.dragging[state.useCurrent ? 'disable' : 'enable']();
-
-  // On the first GPS fix, recenter so the user can see themselves and click a
-  // destination nearby. Only do it once so we don't fight manual panning.
-  if (fromGps && !state.dest && !state.gpsCentered) {
-    map.setView(pt, 9);
-    state.gpsCentered = true;
-  }
-
-  afterPointChange(fromGps);
+function pinColor(idx, len) {
+  if (idx === 0) return '#34d399';        // start — green
+  if (idx === len - 1) return '#2bb3ff';  // destination — blue
+  return '#f5b301';                       // intermediate waypoint — amber
 }
 
-function setDest(pt) {
-  state.dest = pt;
-  els.destLat.value = pt.lat.toFixed(6);
-  els.destLng.value = pt.lng.toFixed(6);
+// Reconcile Leaflet markers with the current route state.
+function reconcileMarkers() {
+  const path = pathPoints();
+  const offset = state.useCurrent && state.gps ? 1 : 0;
 
-  if (!destMarker) {
-    destMarker = L.marker(pt, {
-      icon: markerIcon('dest'),
-      draggable: true,
-    }).addTo(map);
-    destMarker.on('dragend', () => {
-      const ll = destMarker.getLatLng();
-      setDest({ lat: ll.lat, lng: ll.lng });
-    });
-    destMarker.bindTooltip('Destination');
-  } else {
-    destMarker.setLatLng(pt);
-  }
-  afterPointChange(false);
-}
-
-function afterPointChange(fromGps) {
-  // Draw / update the route line.
-  if (state.start && state.dest) {
-    const latlngs = [state.start, state.dest];
-    if (!routeLine) {
-      routeLine = L.polyline(latlngs, {
-        color: '#2bb3ff',
-        weight: 3,
-        dashArray: '6 6',
-      }).addTo(map);
+  // GPS start marker.
+  if (state.useCurrent && state.gps) {
+    if (!gpsMarker) {
+      gpsMarker = L.marker(state.gps, { icon: routePin('#34d399', '1') }).addTo(map);
     } else {
-      routeLine.setLatLngs(latlngs);
+      gpsMarker.setLatLng(state.gps);
+      gpsMarker.setIcon(routePin('#34d399', '1'));
     }
-    const dist = greatCircleNM(state.start, state.dest);
-    els.computedDistance.innerHTML = `Great-circle distance: <strong>${dist.toFixed(1)} NM</strong>`;
-    // Only auto-fit when the user is setting points by hand, not on every GPS tick.
-    if (!fromGps) map.fitBounds(L.latLngBounds(latlngs).pad(0.3));
-  } else {
-    els.computedDistance.textContent = 'Great-circle distance: —';
+    gpsMarker.bindTooltip('Start (live position)');
+  } else if (gpsMarker) {
+    map.removeLayer(gpsMarker);
+    gpsMarker = null;
   }
-  if (state.distanceMode === 'map') recalculate();
-  else saveSettings();
+
+  // Drop surplus waypoint markers.
+  while (wpMarkers.length > state.waypoints.length) {
+    map.removeLayer(wpMarkers.pop());
+  }
+
+  // Create / update a marker per waypoint.
+  state.waypoints.forEach((pt, i) => {
+    const idx = offset + i;
+    const label = String(idx + 1);
+    const color = pinColor(idx, path.length);
+    let m = wpMarkers[i];
+    if (!m) {
+      m = L.marker(pt, { draggable: true }).addTo(map);
+      m.on('dragend', () => {
+        const ll = m.getLatLng();
+        state.waypoints[m._wpIndex] = { lat: ll.lat, lng: ll.lng };
+        updateRoute({ fit: false });
+      });
+      wpMarkers[i] = m;
+    } else {
+      m.setLatLng(pt);
+    }
+    m._wpIndex = i;
+    m.setIcon(routePin(color, label));
+    const name = idx === 0 ? 'Start' : idx === path.length - 1 ? 'Destination' : `Waypoint ${idx}`;
+    m.bindTooltip(name);
+  });
+}
+
+function renderRouteList() {
+  const path = pathPoints();
+  const offset = state.useCurrent && state.gps ? 1 : 0;
+  const list = els.routeList;
+  list.innerHTML = '';
+
+  if (path.length === 0) {
+    list.innerHTML = '<li class="route-empty">No points yet — tap the map.</li>';
+    els.computedDistance.textContent = 'Total distance: —';
+    return;
+  }
+
+  path.forEach((pt, idx) => {
+    const isGps = idx === 0 && offset === 1;
+    const name = idx === 0 ? 'Start' : idx === path.length - 1 ? 'Destination' : `WP ${idx}`;
+    const leg = idx > 0 ? ` · leg ${greatCircleNM(path[idx - 1], pt).toFixed(1)} NM` : '';
+    const coords = `${pt.lat.toFixed(4)}, ${pt.lng.toFixed(4)}`;
+
+    const li = document.createElement('li');
+    li.innerHTML =
+      `<span class="rl-name">${idx + 1}. ${name}${isGps ? ' (GPS)' : ''}</span>` +
+      `<span class="rl-coord">${coords}${leg}</span>`;
+
+    if (!isGps) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'rl-remove';
+      btn.textContent = '✕';
+      btn.title = 'Remove this point';
+      const wpIndex = idx - offset;
+      btn.addEventListener('click', () => {
+        state.waypoints.splice(wpIndex, 1);
+        updateRoute({ fit: false });
+      });
+      li.appendChild(btn);
+    }
+    list.appendChild(li);
+  });
+
+  const total = routeDistanceNM();
+  const legs = Math.max(0, path.length - 1);
+  els.computedDistance.innerHTML =
+    `Total distance: <strong>${total.toFixed(1)} NM</strong> · ${legs} leg${legs === 1 ? '' : 's'}`;
+}
+
+function fitToPath() {
+  const path = pathPoints();
+  if (path.length >= 2) {
+    map.fitBounds(L.latLngBounds(path).pad(0.3));
+  } else if (path.length === 1) {
+    map.setView(path[0], Math.max(map.getZoom(), 9));
+  }
+}
+
+// Central update after any change to the route.
+function updateRoute({ fit = false } = {}) {
+  const path = pathPoints();
+  reconcileMarkers();
+
+  if (path.length >= 2) {
+    if (!routeLine) {
+      routeLine = L.polyline(path, { color: '#2bb3ff', weight: 3, dashArray: '6 6' }).addTo(map);
+    } else {
+      routeLine.setLatLngs(path);
+    }
+  } else if (routeLine) {
+    map.removeLayer(routeLine);
+    routeLine = null;
+  }
+
+  renderRouteList();
+  if (fit) fitToPath();
+  recalculate(); // also persists state
 }
 
 // ── Geolocation ────────────────────────────────────────────────────
@@ -296,12 +364,19 @@ function startWatchingLocation() {
 
   state.watchId = navigator.geolocation.watchPosition(
     (pos) => {
-      const pt = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      state.gps = { lat: pos.coords.latitude, lng: pos.coords.longitude };
       const acc = pos.coords.accuracy ? ` (±${Math.round(pos.coords.accuracy)} m)` : '';
       els.gpsStatus.classList.remove('err');
       els.gpsStatus.textContent =
-        `Live: ${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}${acc} · updated ${new Date().toLocaleTimeString()}`;
-      setStart(pt, { fromGps: true });
+        `Live: ${state.gps.lat.toFixed(5)}, ${state.gps.lng.toFixed(5)}${acc}` +
+        ` · updated ${new Date().toLocaleTimeString()}`;
+
+      const firstFix = !state.gpsCentered;
+      updateRoute({ fit: false });
+      if (firstFix) {
+        state.gpsCentered = true;
+        fitToPath(); // show the whole route if any, else center on the position
+      }
     },
     (err) => {
       els.gpsStatus.classList.add('err');
@@ -327,15 +402,13 @@ function saveSettings() {
       JSON.stringify({
         distanceMode: state.distanceMode,
         departureMode: state.departureMode,
-        setPoint: state.setPoint,
         useCurrent: state.useCurrent,
+        waypoints: state.waypoints,
         distance: els.distance.value,
         speedMin: els.speedMin.value,
         speedMax: els.speedMax.value,
         speedStep: els.speedStep.value,
         departureTime: els.departureTime.value,
-        start: state.start,
-        dest: state.dest,
       })
     );
   } catch (e) {
@@ -352,27 +425,22 @@ function loadSettings() {
   }
   if (!s) return false;
 
-  // Plain input values.
   if (s.distance != null) els.distance.value = s.distance;
   if (s.speedMin != null) els.speedMin.value = s.speedMin;
   if (s.speedMax != null) els.speedMax.value = s.speedMax;
   if (s.speedStep != null) els.speedStep.value = s.speedStep;
   if (s.departureTime) els.departureTime.value = s.departureTime;
 
-  // Modes (also updates the matching tab UI / panes).
-  if (s.setPoint) {
-    state.setPoint = s.setPoint;
-    const radio = document.querySelector(`input[name="setpoint"][value="${s.setPoint}"]`);
-    if (radio) radio.checked = true;
+  if (Array.isArray(s.waypoints)) {
+    state.waypoints = s.waypoints.filter(
+      (p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lng)
+    );
   }
+
   if (s.distanceMode) setDistanceMode(s.distanceMode);
   if (s.departureMode) setDepartureMode(s.departureMode);
 
-  // Saved coordinates.
-  if (s.dest) setDest(s.dest);
-  if (s.start && !s.useCurrent) setStart(s.start);
-
-  // Restore live-location tracking last so it can override the saved start.
+  // Restore live-location tracking (it will add the GPS origin once fixed).
   if (s.useCurrent) applyUseCurrent(true);
   return true;
 }
@@ -401,14 +469,13 @@ function setDepartureMode(mode) {
 function applyUseCurrent(on) {
   state.useCurrent = on;
   els.useCurrent.checked = on;
-  els.startLat.disabled = on;
-  els.startLng.disabled = on;
-  if (startMarker) startMarker.dragging[on ? 'disable' : 'enable']();
   if (on) {
     startWatchingLocation();
   } else {
     stopWatchingLocation();
+    state.gps = null;
     state.gpsCentered = false; // recenter again next time GPS is enabled
+    updateRoute({ fit: false });
   }
   saveSettings();
 }
@@ -439,26 +506,26 @@ function setupInputs() {
     el.addEventListener('input', recalculate)
   );
 
-  // Manual coordinate entry.
-  const readStart = () => {
-    const lat = parseFloat(els.startLat.value);
-    const lng = parseFloat(els.startLng.value);
-    if (Number.isFinite(lat) && Number.isFinite(lng)) setStart({ lat, lng });
-  };
-  const readDest = () => {
-    const lat = parseFloat(els.destLat.value);
-    const lng = parseFloat(els.destLng.value);
-    if (Number.isFinite(lat) && Number.isFinite(lng)) setDest({ lat, lng });
-  };
-  els.startLat.addEventListener('change', readStart);
-  els.startLng.addEventListener('change', readStart);
-  els.destLat.addEventListener('change', readDest);
-  els.destLng.addEventListener('change', readDest);
+  // Add a route point by typing coordinates.
+  els.addPoint.addEventListener('click', () => {
+    const lat = parseFloat(els.wpLat.value);
+    const lng = parseFloat(els.wpLng.value);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      state.waypoints.push({ lat, lng });
+      els.wpLat.value = '';
+      els.wpLng.value = '';
+      updateRoute({ fit: true });
+    }
+  });
 
-  // Which point map clicks set.
-  document.querySelectorAll('input[name="setpoint"]').forEach((r) =>
-    r.addEventListener('change', (e) => { state.setPoint = e.target.value; saveSettings(); })
-  );
+  els.undoPoint.addEventListener('click', () => {
+    state.waypoints.pop();
+    updateRoute({ fit: false });
+  });
+  els.clearRoute.addEventListener('click', () => {
+    state.waypoints = [];
+    updateRoute({ fit: false });
+  });
 
   // Use-current toggle.
   els.useCurrent.addEventListener('change', (e) => applyUseCurrent(e.target.checked));
@@ -487,7 +554,9 @@ function init() {
     applyUseCurrent(true);
   }
 
-  recalculate();
+  // Draw any restored route and frame it (or the live position) on the map.
+  updateRoute({ fit: true });
+
   // Keep ETAs honest when departing "now" without any other input changing.
   setInterval(() => { if (state.departureMode === 'now') recalculate(); }, 30000);
 }

@@ -48,40 +48,40 @@
           </label>
         </div>
 
-        <!-- Map-based distance -->
+        <!-- Map-based: build a multi-leg route -->
         <div id="map-pane" class="pane hidden">
           <div class="field-group">
             <div class="field-group-head">
-              <span>Start position</span>
+              <span>Start</span>
               <label class="chk">
                 <input type="checkbox" id="use-current" />
                 <span>Use current location</span>
               </label>
             </div>
-            <div class="coord-row">
-              <input type="number" id="start-lat" placeholder="Latitude" step="0.000001" />
-              <input type="number" id="start-lng" placeholder="Longitude" step="0.000001" />
-            </div>
             <p class="gps-status" id="gps-status" hidden></p>
+            <p class="hint">Tap the map to add points. The first point is your
+              start (or your live position); each further tap adds the next leg.</p>
           </div>
 
           <div class="field-group">
-            <div class="field-group-head">
-              <span>Destination</span>
+            <div class="field-group-head"><span>Route</span></div>
+            <ol class="route-list" id="route-list"></ol>
+            <div class="route-actions">
+              <button type="button" class="mini-btn" id="undo-point">Undo last</button>
+              <button type="button" class="mini-btn" id="clear-route">Clear route</button>
             </div>
+          </div>
+
+          <div class="field-group">
+            <div class="field-group-head"><span>Add point by coordinates</span></div>
             <div class="coord-row">
-              <input type="number" id="dest-lat" placeholder="Latitude" step="0.000001" />
-              <input type="number" id="dest-lng" placeholder="Longitude" step="0.000001" />
+              <input type="number" id="wp-lat" placeholder="Latitude" step="0.000001" />
+              <input type="number" id="wp-lng" placeholder="Longitude" step="0.000001" />
             </div>
+            <button type="button" class="mini-btn" id="add-point">Add point</button>
           </div>
 
-          <div class="map-set">
-            <span>Click map sets:</span>
-            <label class="radio"><input type="radio" name="setpoint" value="start" /> Start</label>
-            <label class="radio"><input type="radio" name="setpoint" value="dest" checked /> Destination</label>
-          </div>
-
-          <p class="computed" id="computed-distance">Great-circle distance: —</p>
+          <p class="computed" id="computed-distance">Total distance: —</p>
         </div>
       </fieldset>
 

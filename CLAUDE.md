@@ -12,7 +12,10 @@ speeds and shows nights at sea.
 - `styles.css` — styles
 - `app.js` — all logic (geo math, ETA table, map, geolocation, persistence)
 - Map: Leaflet + Esri World Imagery (satellite); no API keys
-- User settings persist to `localStorage` (`sailing-eta-settings-v1`)
+- Distance is either entered manually or measured from a **multi-leg route**
+  built on the map (start/live position + waypoints; total = sum of
+  great-circle legs)
+- User settings persist to `localStorage` (`sailing-eta-settings-v2`)
 
 ## Results table
 
