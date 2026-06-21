@@ -19,8 +19,19 @@
   </header>
 
   <main class="layout">
-    <!-- ── Controls ─────────────────────────────────────────── -->
-    <section class="panel controls" aria-label="Inputs">
+    <!-- ── Map ──────────────────────────────────────────────── -->
+    <section class="panel map-panel">
+      <div id="map" aria-label="Map"></div>
+    </section>
+
+    <!-- Settings toggle (under the map) -->
+    <div class="map-actions">
+      <button type="button" id="settings-toggle" class="settings-btn"
+              aria-expanded="false" aria-controls="controls">⚙ Settings</button>
+    </div>
+
+    <!-- ── Controls (hidden until toggled) ──────────────────── -->
+    <section class="panel controls hidden" id="controls" aria-label="Inputs">
       <!-- Distance source -->
       <fieldset>
         <legend>Distance</legend>
@@ -109,10 +120,8 @@
       </fieldset>
     </section>
 
-    <!-- ── Map + Results ────────────────────────────────────── -->
+    <!-- ── Results ──────────────────────────────────────────── -->
     <section class="panel output">
-      <div id="map" aria-label="Map"></div>
-
       <div class="results">
         <div class="results-head">
           <h2>Estimated arrival</h2>

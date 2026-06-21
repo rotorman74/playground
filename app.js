@@ -8,7 +8,7 @@
 'use strict';
 
 // Bump this on each release (see CLAUDE.md — ask the user for the new number).
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const STORAGE_KEY = 'sailing-eta-settings-v1';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -44,6 +44,8 @@ const els = {
   resultsMeta: $('results-meta'),
   tableBody: document.querySelector('#eta-table tbody'),
   appVersion: $('app-version'),
+  settingsToggle: $('settings-toggle'),
+  controls: $('controls'),
 };
 
 // ── Geo math ───────────────────────────────────────────────────────
@@ -346,9 +348,9 @@ function loadSettings() {
   try {
     s = JSON.parse(localStorage.getItem(STORAGE_KEY));
   } catch (e) {
-    return;
+    return false;
   }
-  if (!s) return;
+  if (!s) return false;
 
   // Plain input values.
   if (s.distance != null) els.distance.value = s.distance;
@@ -372,6 +374,7 @@ function loadSettings() {
 
   // Restore live-location tracking last so it can override the saved start.
   if (s.useCurrent) applyUseCurrent(true);
+  return true;
 }
 
 // ── Mode helpers ───────────────────────────────────────────────────
@@ -410,6 +413,16 @@ function applyUseCurrent(on) {
   saveSettings();
 }
 
+function toggleSettings(show) {
+  const open = show ?? els.controls.classList.contains('hidden');
+  els.controls.classList.toggle('hidden', !open);
+  els.settingsToggle.setAttribute('aria-expanded', String(open));
+  els.settingsToggle.textContent = open ? '⚙ Hide settings' : '⚙ Settings';
+  if (open && state.distanceMode === 'map' && map) {
+    setTimeout(() => map.invalidateSize(), 50);
+  }
+}
+
 // ── Wiring ─────────────────────────────────────────────────────────
 function setupTabs() {
   document.querySelectorAll('[data-mode]').forEach((btn) =>
@@ -418,6 +431,7 @@ function setupTabs() {
   document.querySelectorAll('[data-dep]').forEach((btn) =>
     btn.addEventListener('click', () => setDepartureMode(btn.dataset.dep))
   );
+  els.settingsToggle.addEventListener('click', () => toggleSettings());
 }
 
 function setupInputs() {
@@ -464,7 +478,15 @@ function init() {
   initMap();
   setupTabs();
   setupInputs();
-  loadSettings(); // restore the last session from this device
+
+  // Restore the last session from this device; on a fresh visit, open straight
+  // to the map with live current-location tracking enabled.
+  const restored = loadSettings();
+  if (!restored) {
+    setDistanceMode('map');
+    applyUseCurrent(true);
+  }
+
   recalculate();
   // Keep ETAs honest when departing "now" without any other input changing.
   setInterval(() => { if (state.departureMode === 'now') recalculate(); }, 30000);
