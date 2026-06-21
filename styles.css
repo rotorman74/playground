@@ -329,11 +329,15 @@ tr.current-row .dow-cell { color: var(--text); }
 
 .dir-arrow {
   display: inline-block;
-  font-weight: 700;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 900;
   color: var(--accent);
   transform-origin: center;
   width: 1em;
   text-align: center;
+  vertical-align: middle;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 .empty-row td { color: var(--muted); text-align: center; padding: 24px; }
 

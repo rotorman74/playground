@@ -8,7 +8,7 @@
 'use strict';
 
 // Bump this on each release (auto-incremented — see CLAUDE.md).
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.6.1';
 const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -319,8 +319,28 @@ async function ensureWind(samples) {
 }
 
 // A small arrow glyph rotated to a compass bearing (0 = up/north).
-function arrow(bearing, title) {
-  return `<span class="dir-arrow" style="transform:rotate(${bearing}deg)" title="${title}">↑</span>`;
+function arrow(bearing, title, color) {
+  const c = color ? `;color:${color}` : '';
+  return `<span class="dir-arrow" style="transform:rotate(${bearing}deg)${c}" title="${title}">↑</span>`;
+}
+
+// Windy-style colour ramp by wind speed (knots).
+function windSpeedColor(kn) {
+  if (kn < 10) return '#9be15d'; // light green
+  if (kn < 20) return '#2bb24a'; // green
+  if (kn < 30) return '#ffd23f'; // yellow
+  if (kn < 40) return '#ff9f1c'; // orange
+  if (kn < 50) return '#e23b3b'; // red
+  return '#9b59d0';              // purple
+}
+
+// Colour by the boat-relative wind angle (|degrees| off the bow / point of sail).
+function relAngleColor(absRel) {
+  if (absRel < 45) return '#e23b3b';  // 0–45: red (too close to the wind)
+  if (absRel < 60) return '#ff9f1c';  // 45–60: orange
+  if (absRel < 90) return '#ffd23f';  // 60–90: yellow
+  if (absRel < 135) return '#2bb24a'; // 90–135: green (best reaching)
+  return '#ffd23f';                   // 135–180: yellow (running)
 }
 
 // Build the expandable per-speed wind detail row.
@@ -352,8 +372,8 @@ function buildDetailRow(speed, distance, departure) {
       const relFlow = ((flow - s.course) % 360 + 360) % 360;
       const side = rel === 0 || Math.abs(rel) === 180 ? '' : rel > 0 ? ' S' : ' P';
       windCell =
-        `${arrow(flow, 'Wind blowing toward')} ${Math.round(w.dir)}° · ${Math.round(w.speed)} kn`;
-      relCell = `${arrow(relFlow, 'Wind relative to boat')} ${Math.abs(Math.round(rel))}°${side}`;
+        `${arrow(flow, 'Wind blowing toward', windSpeedColor(w.speed))} ${Math.round(w.dir)}° · ${Math.round(w.speed)} kn`;
+      relCell = `${arrow(relFlow, 'Wind relative to boat', relAngleColor(Math.abs(rel)))} ${Math.abs(Math.round(rel))}°${side}`;
     }
 
     rows +=
