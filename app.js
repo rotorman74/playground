@@ -8,7 +8,7 @@
 'use strict';
 
 // Bump this on each release (auto-incremented — see CLAUDE.md).
-const APP_VERSION = '1.6.2';
+const APP_VERSION = '1.7.0';
 const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -346,6 +346,29 @@ function relAngleColor(absRel) {
   return '#ffd23f';                   // 135–180: yellow (running)
 }
 
+// Coloured (by speed) wind-speed number in knots.
+function speedNum(v) {
+  return `<span class="spd" style="color:${windSpeedColor(v)}">${Math.round(v)}</span>`;
+}
+
+// Apparent wind from true wind + the boat's own motion.
+// wt/wd: true wind speed (kn) and FROM direction; vb: boat speed; course: heading.
+function apparentWind(wt, wd, vb, course) {
+  const flowRad = ((wd + 180) % 360) * Math.PI / 180; // air motion (toward)
+  const crsRad = course * Math.PI / 180;
+  const x = wt * Math.sin(flowRad) - vb * Math.sin(crsRad);
+  const y = wt * Math.cos(flowRad) - vb * Math.cos(crsRad);
+  const speed = Math.hypot(x, y);
+  const flow = (Math.atan2(x, y) * 180 / Math.PI + 360) % 360; // apparent toward
+  const fromDir = (flow + 180) % 360;
+  const rel = ((fromDir - course + 540) % 360) - 180;
+  return { speed, flow, rel };
+}
+
+function sideLabel(rel) {
+  return rel === 0 || Math.abs(rel) === 180 ? '' : rel > 0 ? ' S' : ' P';
+}
+
 // Build the expandable per-speed wind detail row.
 function buildDetailRow(speed, distance, departure) {
   const samples = sampleRoute(speed, distance, departure);
@@ -366,30 +389,42 @@ function buildDetailRow(speed, distance, departure) {
     prevDom = dom;
 
     let windCell = '<span class="muted">…</span>';
-    let relCell = '';
+    let trueCell = '';
+    let appCell = '';
     if (w === null) {
       windCell = '<span class="muted">n/a</span>';
     } else if (w) {
-      const flow = (w.dir + 180) % 360;                 // direction wind blows toward
-      const rel = ((w.dir - s.course + 540) % 360) - 180; // wind-from relative to bow
+      const flow = (w.dir + 180) % 360;                   // true wind blows toward
+      const rel = ((w.dir - s.course + 540) % 360) - 180; // true wind-from rel. to bow
       const relFlow = ((flow - s.course) % 360 + 360) % 360;
-      const side = rel === 0 || Math.abs(rel) === 180 ? '' : rel > 0 ? ' S' : ' P';
+      const gust = w.gust != null ? ` · G ${speedNum(w.gust)}` : '';
       windCell =
-        `${arrow(flow, 'Wind blowing toward', windSpeedColor(w.speed))} ${Math.round(w.dir)}° · ${Math.round(w.speed)} kn`;
-      relCell = `${arrow(relFlow, 'Wind relative to boat', relAngleColor(Math.abs(rel)))} ${Math.abs(Math.round(rel))}°${side}`;
+        `${arrow(flow, 'Wind blowing toward', windSpeedColor(w.speed))} ` +
+        `${Math.round(w.dir)}° · ${speedNum(w.speed)} kn${gust}`;
+      trueCell =
+        `${arrow(relFlow, 'True wind relative to boat', relAngleColor(Math.abs(rel)))} ` +
+        `${Math.abs(Math.round(rel))}°${sideLabel(rel)}`;
+
+      const app = apparentWind(w.speed, w.dir, speed, s.course);
+      const appRelFlow = ((app.flow - s.course) % 360 + 360) % 360;
+      appCell =
+        `${arrow(appRelFlow, 'Apparent wind relative to boat', relAngleColor(Math.abs(app.rel)))} ` +
+        `${Math.abs(Math.round(app.rel))}°${sideLabel(app.rel)} · ${speedNum(app.speed)} kn`;
     }
 
     rows +=
       `<tr><td class="wt-time">${domLabel ? domLabel + ' ' : ''}${hm}</td>` +
       `<td>${arrow(s.course, 'Course')} ${Math.round(s.course)}°</td>` +
       `<td>${windCell}</td>` +
-      `<td>${relCell}</td></tr>`;
+      `<td>${trueCell}</td>` +
+      `<td>${appCell}</td></tr>`;
   }
 
   td.innerHTML =
-    `<table class="wind-table"><thead><tr>` +
-    `<th>day · time</th><th>course</th><th>wind</th><th>rel (bow↑)</th>` +
-    `</tr></thead><tbody>${rows}</tbody></table>`;
+    `<div class="wind-scroll"><table class="wind-table"><thead><tr>` +
+    `<th>day · time</th><th>course</th><th>wind (true)</th>` +
+    `<th>true ∠ (bow↑)</th><th>app ∠ (bow↑)</th>` +
+    `</tr></thead><tbody>${rows}</tbody></table></div>`;
   tr.appendChild(td);
   return tr;
 }
