@@ -299,6 +299,42 @@ tbody tr:hover { background: rgba(43, 179, 255, 0.06); }
 .dow-cell { text-align: left; color: var(--muted); }
 tr.current-row td { font-weight: 700; box-shadow: inset 3px 0 0 var(--accent); }
 tr.current-row .dow-cell { color: var(--text); }
+
+.exp {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 6px 0 0;
+}
+.exp:hover { color: var(--accent); }
+
+/* Per-speed wind detail */
+.detail-row > td { padding: 0 12px 10px 28px; background: rgba(43, 179, 255, 0.04); }
+.wind-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.wind-table th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.wind-table td { padding: 4px 8px; border-bottom: 1px solid rgba(40, 65, 90, 0.5); white-space: nowrap; }
+.wind-table .wt-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.wind-table .muted { color: var(--muted); }
+
+.dir-arrow {
+  display: inline-block;
+  font-weight: 700;
+  color: var(--accent);
+  transform-origin: center;
+  width: 1em;
+  text-align: center;
+}
 .empty-row td { color: var(--muted); text-align: center; padding: 24px; }
 
 .leaflet-container { font: inherit; }

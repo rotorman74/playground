@@ -8,7 +8,7 @@
 'use strict';
 
 // Bump this on each release (auto-incremented — see CLAUDE.md).
-const APP_VERSION = '1.5.1';
+const APP_VERSION = '1.6.0';
 const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -22,6 +22,7 @@ const state = {
   gpsCentered: false,         // have we recentered the map on the first GPS fix?
   track: [],                  // recent GPS fixes [{ t, lat, lng }] for speed-over-ground
   moveIndex: null,            // waypoint index currently being relocated, or null
+  expanded: new Set(),        // speed labels whose wind detail is expanded
 };
 
 // ── DOM ────────────────────────────────────────────────────────────
@@ -70,6 +71,77 @@ function greatCircleNM(a, b) {
     Math.sin(dLat / 2) ** 2 +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
   return 2 * EARTH_NM * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// Initial great-circle bearing from a to b, in degrees (0 = north, clockwise).
+function bearingDeg(a, b) {
+  const φ1 = toRad(a.lat);
+  const φ2 = toRad(b.lat);
+  const Δλ = toRad(b.lng - a.lng);
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+// Point a fraction f (0..1) of the way along the great circle from a to b.
+function interpolate(a, b, f) {
+  const δ = greatCircleNM(a, b) / EARTH_NM;
+  if (δ === 0) return { lat: a.lat, lng: a.lng };
+  const φ1 = toRad(a.lat), λ1 = toRad(a.lng);
+  const φ2 = toRad(b.lat), λ2 = toRad(b.lng);
+  const A = Math.sin((1 - f) * δ) / Math.sin(δ);
+  const B = Math.sin(f * δ) / Math.sin(δ);
+  const x = A * Math.cos(φ1) * Math.cos(λ1) + B * Math.cos(φ2) * Math.cos(λ2);
+  const y = A * Math.cos(φ1) * Math.sin(λ1) + B * Math.cos(φ2) * Math.sin(λ2);
+  const z = A * Math.sin(φ1) + B * Math.sin(φ2);
+  return {
+    lat: Math.atan2(z, Math.sqrt(x * x + y * y)) * 180 / Math.PI,
+    lng: Math.atan2(y, x) * 180 / Math.PI,
+  };
+}
+
+// Position (and course) at a given distance (NM) along the current route path.
+function positionAtDistance(path, d) {
+  let acc = 0;
+  for (let i = 0; i < path.length - 1; i++) {
+    const leg = greatCircleNM(path[i], path[i + 1]);
+    if (d <= acc + leg || i === path.length - 2) {
+      const f = leg > 0 ? (d - acc) / leg : 0;
+      const pos = interpolate(path[i], path[i + 1], Math.min(1, Math.max(0, f)));
+      return { lat: pos.lat, lng: pos.lng, course: bearingDeg(path[i], path[i + 1]) };
+    }
+    acc += leg;
+  }
+  const last = path[path.length - 1];
+  const prev = path[path.length - 2];
+  return { lat: last.lat, lng: last.lng, course: bearingDeg(prev, last) };
+}
+
+// 3-hourly samples along the route for a given speed, from departure to arrival.
+function sampleRoute(speed, distance, departure) {
+  const path = pathPoints();
+  if (path.length < 2 || !(speed > 0)) return [];
+  const arrivalH = distance / speed;
+  const samples = [];
+  const STEP_H = 3;
+  const MAX = 200;
+  for (let h = 0; ; h += STEP_H) {
+    if (speed * h >= distance) {
+      samples.push({
+        date: new Date(departure.getTime() + arrivalH * 3600 * 1000),
+        ...positionAtDistance(path, distance),
+        arrived: true,
+      });
+      break;
+    }
+    samples.push({
+      date: new Date(departure.getTime() + h * 3600 * 1000),
+      ...positionAtDistance(path, speed * h),
+      arrived: false,
+    });
+    if (samples.length >= MAX) break;
+  }
+  return samples;
 }
 
 // ── Route helpers ──────────────────────────────────────────────────
@@ -174,6 +246,131 @@ function renderCurrentSpeed(current) {
   }
 }
 
+// ── Wind (ECMWF via Open-Meteo) ────────────────────────────────────
+const windCache = new Map();   // key -> { speed, dir, gust } | null (unavailable)
+const windPending = new Set();
+let rerenderTimer = null;
+
+function isoHourUTC(date) {
+  const d = new Date(date);
+  d.setUTCMinutes(0, 0, 0);
+  return d.toISOString().slice(0, 13) + ':00';
+}
+function windKey(lat, lng, date) {
+  return `${lat.toFixed(3)},${lng.toFixed(3)},${isoHourUTC(date)}`;
+}
+
+function scheduleRerender() {
+  clearTimeout(rerenderTimer);
+  rerenderTimer = setTimeout(recalculate, 60);
+}
+
+// Fetch wind for any samples not already cached. One request per expand.
+async function ensureWind(samples) {
+  const need = [];
+  for (const s of samples) {
+    const k = windKey(s.lat, s.lng, s.date);
+    if (!windCache.has(k) && !windPending.has(k)) {
+      need.push(s);
+      windPending.add(k);
+    }
+  }
+  if (!need.length) return;
+  const chunk = need.slice(0, 100);
+
+  try {
+    const lats = chunk.map((s) => s.lat.toFixed(4)).join(',');
+    const lons = chunk.map((s) => s.lng.toFixed(4)).join(',');
+    const times = chunk.map((s) => +new Date(s.date));
+    const sd = new Date(Math.min(...times)).toISOString().slice(0, 10);
+    const ed = new Date(Math.max(...times)).toISOString().slice(0, 10);
+    const url =
+      `https://api.open-meteo.com/v1/ecmwf?latitude=${lats}&longitude=${lons}` +
+      `&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=kn` +
+      `&timezone=UTC&start_date=${sd}&end_date=${ed}`;
+    const res = await fetch(url);
+    const json = await res.json();
+    const arr = Array.isArray(json) ? json : [json];
+
+    chunk.forEach((s, i) => {
+      const k = windKey(s.lat, s.lng, s.date);
+      const loc = arr[i];
+      let val = null;
+      if (loc && loc.hourly && loc.hourly.time) {
+        const idx = loc.hourly.time.indexOf(isoHourUTC(s.date));
+        if (idx >= 0) {
+          val = {
+            speed: loc.hourly.wind_speed_10m[idx],
+            dir: loc.hourly.wind_direction_10m[idx],
+            gust: loc.hourly.wind_gusts_10m ? loc.hourly.wind_gusts_10m[idx] : null,
+          };
+        }
+      }
+      windCache.set(k, val);
+      windPending.delete(k);
+    });
+  } catch (e) {
+    chunk.forEach((s) => {
+      windCache.set(windKey(s.lat, s.lng, s.date), null);
+      windPending.delete(windKey(s.lat, s.lng, s.date));
+    });
+  }
+  scheduleRerender();
+}
+
+// A small arrow glyph rotated to a compass bearing (0 = up/north).
+function arrow(bearing, title) {
+  return `<span class="dir-arrow" style="transform:rotate(${bearing}deg)" title="${title}">↑</span>`;
+}
+
+// Build the expandable per-speed wind detail row.
+function buildDetailRow(speed, distance, departure) {
+  const samples = sampleRoute(speed, distance, departure);
+  ensureWind(samples); // async; fills the cache then re-renders
+
+  const tr = document.createElement('tr');
+  tr.className = 'detail-row';
+  const td = document.createElement('td');
+  td.colSpan = 4;
+
+  let rows = '';
+  let prevDom = null;
+  for (const s of samples) {
+    const w = windCache.get(windKey(s.lat, s.lng, s.date));
+    const dom = s.date.getDate();
+    const hm = s.date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    const domLabel = dom !== prevDom ? dom : '';
+    prevDom = dom;
+
+    let windCell = '<span class="muted">…</span>';
+    let relCell = '';
+    if (w === null) {
+      windCell = '<span class="muted">n/a</span>';
+    } else if (w) {
+      const flow = (w.dir + 180) % 360;                 // direction wind blows toward
+      const rel = ((w.dir - s.course + 540) % 360) - 180; // wind-from relative to bow
+      const relFlow = ((flow - s.course) % 360 + 360) % 360;
+      const side = rel === 0 || Math.abs(rel) === 180 ? '' : rel > 0 ? ' S' : ' P';
+      windCell =
+        `${arrow(flow, 'Wind blowing toward')} ${Math.round(w.dir)}° · ${Math.round(w.speed)} kn`;
+      relCell = `${arrow(relFlow, 'Wind relative to boat')} ${Math.abs(Math.round(rel))}°${side}`;
+    }
+
+    rows +=
+      `<tr><td class="wt-time">${domLabel ? domLabel + ' ' : ''}${hm}</td>` +
+      `<td>${arrow(s.course, 'Course')} ${Math.round(s.course)}°</td>` +
+      `<td>${windCell}</td>` +
+      `<td>${relCell}</td></tr>`;
+  }
+
+  td.innerHTML =
+    `<table class="wind-table"><thead><tr>` +
+    `<th>day · time</th><th>course</th><th>wind</th><th>rel (bow↑)</th>` +
+    `</tr></thead><tbody>${rows}</tbody></table>`;
+  tr.appendChild(td);
+  return tr;
+}
+
 function recalculate() {
   const distance = getDistance();
   const departure = getDeparture();
@@ -210,6 +407,9 @@ function recalculate() {
     );
   }
 
+  // Wind detail can only be shown for an actual route (positions over time).
+  const canExpand = state.distanceMode === 'map' && pathPoints().length >= 2;
+
   // Fastest speed (earliest arrival) first. Each date part (weekday, day of
   // month, month) is shown only when it changes from the row above.
   let prevDow = null;
@@ -237,9 +437,15 @@ function recalculate() {
     prevMonthKey = monthKey;
     const dateLabel = parts.join(' ');
 
+    const label = speed.toFixed(1);
+    const isExpanded = canExpand && state.expanded.has(label);
+    const caret = canExpand
+      ? `<button type="button" class="exp" data-speed="${label}" aria-label="Toggle wind detail">${isExpanded ? '▾' : '▸'}</button>`
+      : '';
+
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td class="speed-cell">${speed.toFixed(1)}</td>
+      <td class="speed-cell">${caret}${label}</td>
       <td class="nights-cell">${nights}</td>
       <td class="arr-cell">${arrivalTime}</td>
       <td class="dow-cell">${dateLabel}</td>`;
@@ -252,6 +458,8 @@ function recalculate() {
       if (speed === closest) tr.classList.add('current-row');
     }
     body.appendChild(tr);
+
+    if (isExpanded) body.appendChild(buildDetailRow(speed, distance, departure));
   }
 
   saveSettings();
@@ -749,6 +957,16 @@ function setupInputs() {
   els.mapUndo.addEventListener('click', undoLastPoint);
   els.mapClear.addEventListener('click', clearRoute);
   els.moveCancel.addEventListener('click', cancelMove);
+
+  // Expand / collapse a speed row's wind detail.
+  els.tableBody.addEventListener('click', (e) => {
+    const btn = e.target.closest('.exp');
+    if (!btn) return;
+    const k = btn.dataset.speed;
+    if (state.expanded.has(k)) state.expanded.delete(k);
+    else state.expanded.add(k);
+    recalculate();
+  });
 
   // Use-current toggle.
   els.useCurrent.addEventListener('change', (e) => applyUseCurrent(e.target.checked));
