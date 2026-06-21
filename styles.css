@@ -206,13 +206,14 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 }
 .route-pin-body > span { transform: rotate(45deg); }
 
-/* Waypoint remove popup */
-.wp-popup { min-width: 140px; }
+/* Waypoint popup */
+.wp-popup { min-width: 150px; }
 .wp-popup-name { font-weight: 700; margin-bottom: 2px; }
 .wp-popup-coord { color: #4a5a6a; font-size: 12px; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+.wp-popup-actions { display: flex; gap: 6px; }
+.wp-popup-move,
 .wp-popup-remove {
-  width: 100%;
-  background: #e23b3b;
+  flex: 1;
   color: #fff;
   border: none;
   padding: 6px 10px;
@@ -221,7 +222,24 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   font-size: 13px;
   font-weight: 600;
 }
+.wp-popup-move { background: var(--accent-2); }
+.wp-popup-move:hover { background: var(--accent); }
+.wp-popup-remove { background: #e23b3b; }
 .wp-popup-remove:hover { background: #c92f2f; }
+
+/* Move-mode banner + cursor */
+.move-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  background: rgba(43, 179, 255, 0.14);
+  border: 1px solid var(--accent-2);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.leaflet-container.move-mode { cursor: crosshair; }
 
 .computed {
   margin: 12px 0 0;

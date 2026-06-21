@@ -8,7 +8,7 @@
 'use strict';
 
 // Bump this on each release (see CLAUDE.md — ask the user for the new number).
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.0';
 const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -21,6 +21,7 @@ const state = {
   watchId: null,              // geolocation watch handle
   gpsCentered: false,         // have we recentered the map on the first GPS fix?
   track: [],                  // recent GPS fixes [{ t, lat, lng }] for speed-over-ground
+  moveIndex: null,            // waypoint index currently being relocated, or null
 };
 
 // ── DOM ────────────────────────────────────────────────────────────
@@ -46,6 +47,8 @@ const els = {
   clearRoute: $('clear-route'),
   mapUndo: $('map-undo'),
   mapClear: $('map-clear'),
+  moveBanner: $('move-banner'),
+  moveCancel: $('move-cancel'),
   computedDistance: $('computed-distance'),
   resultsMeta: $('results-meta'),
   tableBody: document.querySelector('#eta-table tbody'),
@@ -238,7 +241,7 @@ function recalculate() {
 }
 
 // ── Map ────────────────────────────────────────────────────────────
-let map, routeLine, gpsMarker;
+let map, routeLine, routeHit, gpsMarker;
 let wpMarkers = [];
 
 function initMap() {
@@ -260,9 +263,16 @@ function initMap() {
     { maxZoom: 19, opacity: 0.9 }
   ).addTo(map);
 
-  // Each tap appends a point to the route.
+  // A tap either relocates the point being moved, or appends a new point.
   map.on('click', (e) => {
-    state.waypoints.push({ lat: e.latlng.lat, lng: e.latlng.lng });
+    const pt = { lat: e.latlng.lat, lng: e.latlng.lng };
+    if (state.moveIndex !== null) {
+      if (state.moveIndex < state.waypoints.length) state.waypoints[state.moveIndex] = pt;
+      cancelMove();
+      updateRoute({ fit: false });
+      return;
+    }
+    state.waypoints.push(pt);
     updateRoute({ fit: false });
   });
 }
@@ -290,7 +300,9 @@ function reconcileMarkers() {
   // GPS start marker.
   if (state.useCurrent && state.gps) {
     if (!gpsMarker) {
-      gpsMarker = L.marker(state.gps, { icon: routePin('#34d399', '1') }).addTo(map);
+      gpsMarker = L.marker(state.gps, {
+        icon: routePin('#34d399', '1'), bubblingMouseEvents: false,
+      }).addTo(map);
     } else {
       gpsMarker.setLatLng(state.gps);
       gpsMarker.setIcon(routePin('#34d399', '1'));
@@ -313,7 +325,7 @@ function reconcileMarkers() {
     const color = pinColor(idx, path.length);
     let m = wpMarkers[i];
     if (!m) {
-      m = L.marker(pt, { draggable: true }).addTo(map);
+      m = L.marker(pt, { draggable: true, bubblingMouseEvents: false }).addTo(map);
       m.on('dragend', () => {
         const ll = m.getLatLng();
         state.waypoints[m._wpIndex] = { lat: ll.lat, lng: ll.lng };
@@ -334,15 +346,31 @@ function reconcileMarkers() {
     popup.innerHTML =
       `<div class="wp-popup-name">${idx + 1}. ${name}</div>` +
       `<div class="wp-popup-coord">${pt.lat.toFixed(4)}, ${pt.lng.toFixed(4)}</div>`;
+
+    const actions = document.createElement('div');
+    actions.className = 'wp-popup-actions';
+
+    const mv = document.createElement('button');
+    mv.type = 'button';
+    mv.className = 'wp-popup-move';
+    mv.textContent = 'Move';
+    mv.addEventListener('click', () => {
+      map.closePopup();
+      startMove(m._wpIndex);
+    });
+
     const rm = document.createElement('button');
     rm.type = 'button';
     rm.className = 'wp-popup-remove';
-    rm.textContent = 'Remove point';
+    rm.textContent = 'Remove';
     rm.addEventListener('click', () => {
       map.closePopup();
       removeWaypoint(m._wpIndex);
     });
-    popup.appendChild(rm);
+
+    actions.appendChild(mv);
+    actions.appendChild(rm);
+    popup.appendChild(actions);
     m.bindPopup(popup);
   });
 }
@@ -404,16 +432,19 @@ function fitToPath() {
 // ── Route mutations ────────────────────────────────────────────────
 function removeWaypoint(i) {
   if (i < 0 || i >= state.waypoints.length) return;
+  cancelMove();
   state.waypoints.splice(i, 1);
   updateRoute({ fit: false });
 }
 
 function undoLastPoint() {
+  cancelMove();
   state.waypoints.pop();
   updateRoute({ fit: false });
 }
 
 function clearRoute() {
+  cancelMove();
   state.waypoints = [];
   updateRoute({ fit: false });
 }
@@ -424,6 +455,70 @@ function updateMapActions() {
   els.mapClear.classList.toggle('hidden', !show);
 }
 
+// ── Move a waypoint by tapping the map ──────────────────────────────
+function startMove(i) {
+  state.moveIndex = i;
+  els.moveBanner.classList.remove('hidden');
+  const el = map.getContainer();
+  el.classList.add('move-mode');
+}
+
+function cancelMove() {
+  state.moveIndex = null;
+  els.moveBanner.classList.add('hidden');
+  map.getContainer().classList.remove('move-mode');
+}
+
+// ── Insert a waypoint by tapping the route line ─────────────────────
+function findInsertSegment(latlng) {
+  const path = pathPoints();
+  if (path.length < 2) return null;
+  const p = map.latLngToLayerPoint(latlng);
+  let best = Infinity;
+  let segIdx = 0;
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = map.latLngToLayerPoint(path[i]);
+    const b = map.latLngToLayerPoint(path[i + 1]);
+    const d = L.LineUtil.pointToSegmentDistance(p, a, b);
+    if (d < best) { best = d; segIdx = i; }
+  }
+  return segIdx;
+}
+
+function insertOnLine(latlng) {
+  const seg = findInsertSegment(latlng);
+  if (seg === null) return;
+  const offset = state.useCurrent && state.gps ? 1 : 0;
+  const wpIndex = Math.max(0, seg + 1 - offset);
+  state.waypoints.splice(wpIndex, 0, { lat: latlng.lat, lng: latlng.lng });
+  updateRoute({ fit: false });
+}
+
+function onLineClick(e) {
+  // While moving a point, a tap on the line relocates it there.
+  if (state.moveIndex !== null) {
+    if (state.moveIndex < state.waypoints.length) {
+      state.waypoints[state.moveIndex] = { lat: e.latlng.lat, lng: e.latlng.lng };
+    }
+    cancelMove();
+    updateRoute({ fit: false });
+    return;
+  }
+  const div = document.createElement('div');
+  div.className = 'wp-popup';
+  div.innerHTML = '<div class="wp-popup-name">Insert a waypoint here?</div>';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'wp-popup-move';
+  b.textContent = 'Insert point';
+  b.addEventListener('click', () => {
+    map.closePopup();
+    insertOnLine(e.latlng);
+  });
+  div.appendChild(b);
+  L.popup().setLatLng(e.latlng).setContent(div).openOn(map);
+}
+
 // Central update after any change to the route.
 function updateRoute({ fit = false } = {}) {
   const path = pathPoints();
@@ -432,13 +527,19 @@ function updateRoute({ fit = false } = {}) {
 
   if (path.length >= 2) {
     if (!routeLine) {
+      // A wide, invisible line underneath makes the route easy to tap.
+      routeHit = L.polyline(path, {
+        color: '#000', weight: 24, opacity: 0, bubblingMouseEvents: false,
+      }).addTo(map);
+      routeHit.on('click', onLineClick);
       routeLine = L.polyline(path, { color: '#2bb3ff', weight: 3, dashArray: '6 6' }).addTo(map);
     } else {
+      routeHit.setLatLngs(path);
       routeLine.setLatLngs(path);
     }
-  } else if (routeLine) {
-    map.removeLayer(routeLine);
-    routeLine = null;
+  } else {
+    if (routeHit) { map.removeLayer(routeHit); routeHit = null; }
+    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
   }
 
   renderRouteList();
@@ -630,6 +731,7 @@ function setupInputs() {
   els.clearRoute.addEventListener('click', clearRoute);
   els.mapUndo.addEventListener('click', undoLastPoint);
   els.mapClear.addEventListener('click', clearRoute);
+  els.moveCancel.addEventListener('click', cancelMove);
 
   // Use-current toggle.
   els.useCurrent.addEventListener('change', (e) => applyUseCurrent(e.target.checked));
