@@ -8,7 +8,7 @@
 'use strict';
 
 // Bump this on each release (see CLAUDE.md — ask the user for the new number).
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.3.0';
 const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -44,6 +44,8 @@ const els = {
   addPoint: $('add-point'),
   undoPoint: $('undo-point'),
   clearRoute: $('clear-route'),
+  mapUndo: $('map-undo'),
+  mapClear: $('map-clear'),
   computedDistance: $('computed-distance'),
   resultsMeta: $('results-meta'),
   tableBody: document.querySelector('#eta-table tbody'),
@@ -325,6 +327,23 @@ function reconcileMarkers() {
     m.setIcon(routePin(color, label));
     const name = idx === 0 ? 'Start' : idx === path.length - 1 ? 'Destination' : `Waypoint ${idx}`;
     m.bindTooltip(name);
+
+    // Tap a pin to view it and remove it from the route.
+    const popup = document.createElement('div');
+    popup.className = 'wp-popup';
+    popup.innerHTML =
+      `<div class="wp-popup-name">${idx + 1}. ${name}</div>` +
+      `<div class="wp-popup-coord">${pt.lat.toFixed(4)}, ${pt.lng.toFixed(4)}</div>`;
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'wp-popup-remove';
+    rm.textContent = 'Remove point';
+    rm.addEventListener('click', () => {
+      map.closePopup();
+      removeWaypoint(m._wpIndex);
+    });
+    popup.appendChild(rm);
+    m.bindPopup(popup);
   });
 }
 
@@ -382,10 +401,34 @@ function fitToPath() {
   }
 }
 
+// ── Route mutations ────────────────────────────────────────────────
+function removeWaypoint(i) {
+  if (i < 0 || i >= state.waypoints.length) return;
+  state.waypoints.splice(i, 1);
+  updateRoute({ fit: false });
+}
+
+function undoLastPoint() {
+  state.waypoints.pop();
+  updateRoute({ fit: false });
+}
+
+function clearRoute() {
+  state.waypoints = [];
+  updateRoute({ fit: false });
+}
+
+function updateMapActions() {
+  const show = state.distanceMode === 'map' && state.waypoints.length > 0;
+  els.mapUndo.classList.toggle('hidden', !show);
+  els.mapClear.classList.toggle('hidden', !show);
+}
+
 // Central update after any change to the route.
 function updateRoute({ fit = false } = {}) {
   const path = pathPoints();
   reconcileMarkers();
+  updateMapActions();
 
   if (path.length >= 2) {
     if (!routeLine) {
@@ -517,6 +560,7 @@ function setDistanceMode(mode) {
   els.manualPane.classList.toggle('hidden', mode !== 'manual');
   els.mapPane.classList.toggle('hidden', mode !== 'map');
   if (mode === 'map' && map) setTimeout(() => map.invalidateSize(), 50);
+  updateMapActions();
   recalculate();
 }
 
@@ -582,14 +626,10 @@ function setupInputs() {
     }
   });
 
-  els.undoPoint.addEventListener('click', () => {
-    state.waypoints.pop();
-    updateRoute({ fit: false });
-  });
-  els.clearRoute.addEventListener('click', () => {
-    state.waypoints = [];
-    updateRoute({ fit: false });
-  });
+  els.undoPoint.addEventListener('click', undoLastPoint);
+  els.clearRoute.addEventListener('click', clearRoute);
+  els.mapUndo.addEventListener('click', undoLastPoint);
+  els.mapClear.addEventListener('click', clearRoute);
 
   // Use-current toggle.
   els.useCurrent.addEventListener('change', (e) => applyUseCurrent(e.target.checked));

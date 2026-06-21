@@ -39,7 +39,9 @@ html, body {
   margin: 0 auto;
 }
 
-.map-actions { display: flex; justify-content: flex-end; }
+.map-actions { display: flex; align-items: center; gap: 8px; }
+.map-actions-spacer { flex: 1; }
+.settings-btn.ghost { font-weight: 400; }
 .settings-btn {
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -203,6 +205,23 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   font-weight: 700;
 }
 .route-pin-body > span { transform: rotate(45deg); }
+
+/* Waypoint remove popup */
+.wp-popup { min-width: 140px; }
+.wp-popup-name { font-weight: 700; margin-bottom: 2px; }
+.wp-popup-coord { color: #4a5a6a; font-size: 12px; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+.wp-popup-remove {
+  width: 100%;
+  background: #e23b3b;
+  color: #fff;
+  border: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.wp-popup-remove:hover { background: #c92f2f; }
 
 .computed {
   margin: 12px 0 0;
