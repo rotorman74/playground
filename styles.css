@@ -233,6 +233,12 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .results-head h2 { margin: 0; font-size: 18px; }
 .results-meta { color: var(--muted); font-size: 13px; }
 
+.current-speed {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.current-speed strong { color: var(--accent); }
+.current-speed .cs-note { color: var(--muted); font-size: 12px; }
 .col-legend {
   margin: 0 0 6px;
   font-size: 12px;
@@ -252,7 +258,10 @@ td {
 tbody tr:hover { background: rgba(43, 179, 255, 0.06); }
 .speed-cell { font-weight: 600; color: var(--accent); width: 1%; }
 .nights-cell { width: 1%; }
-.dow-cell { width: 1%; color: var(--muted); }
+.arr-cell { width: 1%; }
+.dow-cell { text-align: left; color: var(--muted); }
+tr.current-row td { font-weight: 700; box-shadow: inset 3px 0 0 var(--accent); }
+tr.current-row .dow-cell { color: var(--text); }
 .empty-row td { color: var(--muted); text-align: center; padding: 24px; }
 
 .leaflet-container { font: inherit; }

@@ -118,6 +118,17 @@
           </label>
         </div>
       </fieldset>
+
+      <!-- Current speed -->
+      <fieldset>
+        <legend>Current speed</legend>
+        <label class="field">
+          <span>Average over (minutes)</span>
+          <input type="number" id="avg-minutes" min="0.5" step="0.5" value="2" />
+        </label>
+        <p class="hint">Estimated from GPS while “Use current location” is on; the
+          matching speed row is highlighted.</p>
+      </fieldset>
     </section>
 
     <!-- ── Results ──────────────────────────────────────────── -->
@@ -127,6 +138,7 @@
           <h2>Estimated arrival</h2>
           <span class="results-meta" id="results-meta"></span>
         </div>
+        <p class="current-speed" id="current-speed"></p>
         <p class="col-legend">speed (kn) · nights · arrival · day</p>
         <div class="table-wrap">
           <table id="eta-table">

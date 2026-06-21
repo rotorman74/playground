@@ -8,7 +8,7 @@
 'use strict';
 
 // Bump this on each release (see CLAUDE.md — ask the user for the new number).
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -20,6 +20,7 @@ const state = {
   waypoints: [],              // user-placed route points [{ lat, lng }, ...]
   watchId: null,              // geolocation watch handle
   gpsCentered: false,         // have we recentered the map on the first GPS fix?
+  track: [],                  // recent GPS fixes [{ t, lat, lng }] for speed-over-ground
 };
 
 // ── DOM ────────────────────────────────────────────────────────────
@@ -33,6 +34,8 @@ const els = {
   speedMin: $('speed-min'),
   speedMax: $('speed-max'),
   speedStep: $('speed-step'),
+  avgMinutes: $('avg-minutes'),
+  currentSpeed: $('current-speed'),
   useCurrent: $('use-current'),
   gpsStatus: $('gps-status'),
   routeList: $('route-list'),
@@ -136,11 +139,44 @@ function speedList() {
   return speeds;
 }
 
+// Average speed over ground (knots) across the configured time window, from the
+// recent GPS track. Returns null when there isn't enough movement data yet.
+function averagedMinutes() {
+  const m = parseFloat(els.avgMinutes.value);
+  return Number.isFinite(m) && m > 0 ? m : 2;
+}
+
+function computeCurrentSpeed() {
+  const windowMs = averagedMinutes() * 60000;
+  const now = Date.now();
+  const pts = state.track.filter((p) => now - p.t <= windowMs);
+  if (pts.length < 2) return null;
+  let dist = 0;
+  for (let i = 1; i < pts.length; i++) dist += greatCircleNM(pts[i - 1], pts[i]);
+  const hours = (pts[pts.length - 1].t - pts[0].t) / 3600000;
+  if (hours <= 0) return null;
+  return dist / hours;
+}
+
+function renderCurrentSpeed(current) {
+  if (current === null) {
+    els.currentSpeed.innerHTML =
+      `Current speed: <strong>—</strong> <span class="cs-note">(needs GPS while moving)</span>`;
+  } else {
+    els.currentSpeed.innerHTML =
+      `Current speed: <strong>${current.toFixed(1)} kn</strong>` +
+      ` <span class="cs-note">avg ${averagedMinutes()} min</span>`;
+  }
+}
+
 function recalculate() {
   const distance = getDistance();
   const departure = getDeparture();
   const body = els.tableBody;
   body.innerHTML = '';
+
+  const current = computeCurrentSpeed();
+  renderCurrentSpeed(current);
 
   if (distance === null) {
     const msg =
@@ -158,7 +194,18 @@ function recalculate() {
     `${distance.toFixed(1)} NM${legs ? ` · ${legs} leg${legs > 1 ? 's' : ''}` : ''}` +
     ` · departing ${formatETA(departure)}`;
 
-  for (const speed of speedList()) {
+  const speeds = speedList();
+  // The row closest to the current speed gets the strongest highlight; nearby
+  // rows fade out over HIGHLIGHT_SPAN knots.
+  const HIGHLIGHT_SPAN = 0.5;
+  let closest = null;
+  if (current !== null) {
+    closest = speeds.reduce((a, b) =>
+      Math.abs(b - current) < Math.abs(a - current) ? b : a
+    );
+  }
+
+  for (const speed of speeds) {
     const hours = distance / speed;
     const eta = new Date(departure.getTime() + hours * 3600 * 1000);
     const nights = countNights(departure, eta);
@@ -172,8 +219,16 @@ function recalculate() {
     tr.innerHTML = `
       <td class="speed-cell">${speed.toFixed(1)}</td>
       <td class="nights-cell">${nights}</td>
-      <td>${arrivalTime}</td>
+      <td class="arr-cell">${arrivalTime}</td>
       <td class="dow-cell">${dow}</td>`;
+
+    if (current !== null) {
+      const strength = Math.max(0, 1 - Math.abs(speed - current) / HIGHLIGHT_SPAN);
+      if (strength > 0) {
+        tr.style.background = `rgba(43, 179, 255, ${(strength * 0.5).toFixed(3)})`;
+      }
+      if (speed === closest) tr.classList.add('current-row');
+    }
     body.appendChild(tr);
   }
 
@@ -365,6 +420,12 @@ function startWatchingLocation() {
   state.watchId = navigator.geolocation.watchPosition(
     (pos) => {
       state.gps = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+
+      // Record the fix for speed-over-ground; keep ~30 min of history.
+      const now = Date.now();
+      state.track.push({ t: now, lat: state.gps.lat, lng: state.gps.lng });
+      state.track = state.track.filter((p) => now - p.t <= 30 * 60000);
+
       const acc = pos.coords.accuracy ? ` (±${Math.round(pos.coords.accuracy)} m)` : '';
       els.gpsStatus.classList.remove('err');
       els.gpsStatus.textContent =
@@ -408,6 +469,7 @@ function saveSettings() {
         speedMin: els.speedMin.value,
         speedMax: els.speedMax.value,
         speedStep: els.speedStep.value,
+        avgMinutes: els.avgMinutes.value,
         departureTime: els.departureTime.value,
       })
     );
@@ -429,6 +491,7 @@ function loadSettings() {
   if (s.speedMin != null) els.speedMin.value = s.speedMin;
   if (s.speedMax != null) els.speedMax.value = s.speedMax;
   if (s.speedStep != null) els.speedStep.value = s.speedStep;
+  if (s.avgMinutes != null) els.avgMinutes.value = s.avgMinutes;
   if (s.departureTime) els.departureTime.value = s.departureTime;
 
   if (Array.isArray(s.waypoints)) {
@@ -474,6 +537,7 @@ function applyUseCurrent(on) {
   } else {
     stopWatchingLocation();
     state.gps = null;
+    state.track = [];
     state.gpsCentered = false; // recenter again next time GPS is enabled
     updateRoute({ fit: false });
   }
@@ -502,8 +566,8 @@ function setupTabs() {
 }
 
 function setupInputs() {
-  [els.distance, els.speedMin, els.speedMax, els.speedStep, els.departureTime].forEach((el) =>
-    el.addEventListener('input', recalculate)
+  [els.distance, els.speedMin, els.speedMax, els.speedStep, els.avgMinutes, els.departureTime].forEach(
+    (el) => el.addEventListener('input', recalculate)
   );
 
   // Add a route point by typing coordinates.
@@ -557,8 +621,8 @@ function init() {
   // Draw any restored route and frame it (or the live position) on the map.
   updateRoute({ fit: true });
 
-  // Keep ETAs honest when departing "now" without any other input changing.
-  setInterval(() => { if (state.departureMode === 'now') recalculate(); }, 30000);
+  // Refresh "now" ETAs and the current-speed reading / row highlight over time.
+  setInterval(recalculate, 15000);
 }
 
 document.addEventListener('DOMContentLoaded', init);
