@@ -7,6 +7,10 @@
 
 'use strict';
 
+// Bump this on each release (see CLAUDE.md — ask the user for the new number).
+const APP_VERSION = '1.0.0';
+const STORAGE_KEY = 'sailing-eta-settings-v1';
+
 // ── State ──────────────────────────────────────────────────────────
 const state = {
   distanceMode: 'manual',     // 'manual' | 'map'
@@ -39,6 +43,7 @@ const els = {
   computedDistance: $('computed-distance'),
   resultsMeta: $('results-meta'),
   tableBody: document.querySelector('#eta-table tbody'),
+  appVersion: $('app-version'),
 };
 
 // ── Geo math ───────────────────────────────────────────────────────
@@ -123,7 +128,7 @@ function recalculate() {
 
   if (distance === null) {
     body.innerHTML =
-      '<tr class="empty-row"><td colspan="3">Enter a distance, or set start &amp; destination on the map.</td></tr>';
+      '<tr class="empty-row"><td colspan="4">Enter a distance, or set start &amp; destination on the map.</td></tr>';
     els.resultsMeta.textContent = '';
     return;
   }
@@ -134,19 +139,23 @@ function recalculate() {
   for (const speed of speedList()) {
     const hours = distance / speed;
     const eta = new Date(departure.getTime() + hours * 3600 * 1000);
-    const days = countNights(departure, eta); // calendar days advanced to arrival
+    const nights = countNights(departure, eta);
     const arrivalTime = eta.toLocaleTimeString(undefined, {
       hour: '2-digit',
       minute: '2-digit',
     });
+    const dow = eta.toLocaleDateString(undefined, { weekday: 'short' });
 
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td class="speed-cell">${speed.toFixed(1)}</td>
-      <td class="days-cell">${days}</td>
-      <td>${arrivalTime}</td>`;
+      <td class="nights-cell">${nights}</td>
+      <td>${arrivalTime}</td>
+      <td class="dow-cell">${dow}</td>`;
     body.appendChild(tr);
   }
+
+  saveSettings();
 }
 
 // ── Map ────────────────────────────────────────────────────────────
@@ -266,6 +275,7 @@ function afterPointChange(fromGps) {
     els.computedDistance.textContent = 'Great-circle distance: —';
   }
   if (state.distanceMode === 'map') recalculate();
+  else saveSettings();
 }
 
 // ── Geolocation ────────────────────────────────────────────────────
@@ -307,31 +317,107 @@ function stopWatchingLocation() {
   els.gpsStatus.hidden = true;
 }
 
+// ── Persistence ────────────────────────────────────────────────────
+function saveSettings() {
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        distanceMode: state.distanceMode,
+        departureMode: state.departureMode,
+        setPoint: state.setPoint,
+        useCurrent: state.useCurrent,
+        distance: els.distance.value,
+        speedMin: els.speedMin.value,
+        speedMax: els.speedMax.value,
+        speedStep: els.speedStep.value,
+        departureTime: els.departureTime.value,
+        start: state.start,
+        dest: state.dest,
+      })
+    );
+  } catch (e) {
+    /* storage unavailable (private mode / disabled) — ignore */
+  }
+}
+
+function loadSettings() {
+  let s;
+  try {
+    s = JSON.parse(localStorage.getItem(STORAGE_KEY));
+  } catch (e) {
+    return;
+  }
+  if (!s) return;
+
+  // Plain input values.
+  if (s.distance != null) els.distance.value = s.distance;
+  if (s.speedMin != null) els.speedMin.value = s.speedMin;
+  if (s.speedMax != null) els.speedMax.value = s.speedMax;
+  if (s.speedStep != null) els.speedStep.value = s.speedStep;
+  if (s.departureTime) els.departureTime.value = s.departureTime;
+
+  // Modes (also updates the matching tab UI / panes).
+  if (s.setPoint) {
+    state.setPoint = s.setPoint;
+    const radio = document.querySelector(`input[name="setpoint"][value="${s.setPoint}"]`);
+    if (radio) radio.checked = true;
+  }
+  if (s.distanceMode) setDistanceMode(s.distanceMode);
+  if (s.departureMode) setDepartureMode(s.departureMode);
+
+  // Saved coordinates.
+  if (s.dest) setDest(s.dest);
+  if (s.start && !s.useCurrent) setStart(s.start);
+
+  // Restore live-location tracking last so it can override the saved start.
+  if (s.useCurrent) applyUseCurrent(true);
+}
+
+// ── Mode helpers ───────────────────────────────────────────────────
+function setDistanceMode(mode) {
+  state.distanceMode = mode;
+  document.querySelectorAll('[data-mode]').forEach((b) =>
+    b.classList.toggle('active', b.dataset.mode === mode)
+  );
+  els.manualPane.classList.toggle('hidden', mode !== 'manual');
+  els.mapPane.classList.toggle('hidden', mode !== 'map');
+  if (mode === 'map' && map) setTimeout(() => map.invalidateSize(), 50);
+  recalculate();
+}
+
+function setDepartureMode(mode) {
+  state.departureMode = mode;
+  document.querySelectorAll('[data-dep]').forEach((b) =>
+    b.classList.toggle('active', b.dataset.dep === mode)
+  );
+  els.futurePane.classList.toggle('hidden', mode !== 'future');
+  recalculate();
+}
+
+function applyUseCurrent(on) {
+  state.useCurrent = on;
+  els.useCurrent.checked = on;
+  els.startLat.disabled = on;
+  els.startLng.disabled = on;
+  if (startMarker) startMarker.dragging[on ? 'disable' : 'enable']();
+  if (on) {
+    startWatchingLocation();
+  } else {
+    stopWatchingLocation();
+    state.gpsCentered = false; // recenter again next time GPS is enabled
+  }
+  saveSettings();
+}
+
 // ── Wiring ─────────────────────────────────────────────────────────
 function setupTabs() {
-  // Distance mode tabs
-  document.querySelectorAll('[data-mode]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('[data-mode]').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      state.distanceMode = btn.dataset.mode;
-      els.manualPane.classList.toggle('hidden', state.distanceMode !== 'manual');
-      els.mapPane.classList.toggle('hidden', state.distanceMode !== 'map');
-      if (state.distanceMode === 'map') setTimeout(() => map.invalidateSize(), 50);
-      recalculate();
-    });
-  });
-
-  // Departure mode tabs
-  document.querySelectorAll('[data-dep]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('[data-dep]').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      state.departureMode = btn.dataset.dep;
-      els.futurePane.classList.toggle('hidden', state.departureMode !== 'future');
-      recalculate();
-    });
-  });
+  document.querySelectorAll('[data-mode]').forEach((btn) =>
+    btn.addEventListener('click', () => setDistanceMode(btn.dataset.mode))
+  );
+  document.querySelectorAll('[data-dep]').forEach((btn) =>
+    btn.addEventListener('click', () => setDepartureMode(btn.dataset.dep))
+  );
 }
 
 function setupInputs() {
@@ -357,24 +443,13 @@ function setupInputs() {
 
   // Which point map clicks set.
   document.querySelectorAll('input[name="setpoint"]').forEach((r) =>
-    r.addEventListener('change', (e) => { state.setPoint = e.target.value; })
+    r.addEventListener('change', (e) => { state.setPoint = e.target.value; saveSettings(); })
   );
 
   // Use-current toggle.
-  els.useCurrent.addEventListener('change', (e) => {
-    state.useCurrent = e.target.checked;
-    els.startLat.disabled = state.useCurrent;
-    els.startLng.disabled = state.useCurrent;
-    if (startMarker) startMarker.dragging[state.useCurrent ? 'disable' : 'enable']();
-    if (state.useCurrent) {
-      startWatchingLocation();
-    } else {
-      stopWatchingLocation();
-      state.gpsCentered = false; // recenter again next time GPS is enabled
-    }
-  });
+  els.useCurrent.addEventListener('change', (e) => applyUseCurrent(e.target.checked));
 
-  // Default the future-time picker to one hour from now.
+  // Default the future-time picker to one hour from now (unless restored later).
   const soon = new Date(Date.now() + 3600 * 1000);
   soon.setSeconds(0, 0);
   const pad = (n) => String(n).padStart(2, '0');
@@ -385,9 +460,11 @@ function setupInputs() {
 
 // ── Init ───────────────────────────────────────────────────────────
 function init() {
+  if (els.appVersion) els.appVersion.textContent = `v${APP_VERSION}`;
   initMap();
   setupTabs();
   setupInputs();
+  loadSettings(); // restore the last session from this device
   recalculate();
   // Keep ETAs honest when departing "now" without any other input changing.
   setInterval(() => { if (state.departureMode === 'now') recalculate(); }, 30000);

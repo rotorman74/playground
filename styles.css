@@ -176,7 +176,17 @@ td {
 }
 tbody tr:hover { background: rgba(43, 179, 255, 0.06); }
 .speed-cell { font-weight: 600; color: var(--accent); width: 1%; }
-.days-cell { width: 1%; }
+.nights-cell { width: 1%; }
+.dow-cell { width: 1%; color: var(--muted); }
 .empty-row td { color: var(--muted); text-align: center; padding: 24px; }
 
 .leaflet-container { font: inherit; }
+
+.app-footer {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 8px 24px 28px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
