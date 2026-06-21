@@ -8,7 +8,7 @@
 'use strict';
 
 // Bump this on each release (auto-incremented — see CLAUDE.md).
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.7.1';
 const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -397,19 +397,24 @@ function buildDetailRow(speed, distance, departure) {
       const flow = (w.dir + 180) % 360;                   // true wind blows toward
       const rel = ((w.dir - s.course + 540) % 360) - 180; // true wind-from rel. to bow
       const relFlow = ((flow - s.course) % 360 + 360) % 360;
-      const gust = w.gust != null ? ` · G ${speedNum(w.gust)}` : '';
+      const trueSpd = w.gust != null
+        ? `${speedNum(w.speed)}-${speedNum(w.gust)}`
+        : speedNum(w.speed);
       windCell =
         `${arrow(flow, 'Wind blowing toward', windSpeedColor(w.speed))} ` +
-        `${Math.round(w.dir)}° · ${speedNum(w.speed)} kn${gust}`;
+        `${Math.round(w.dir)}° · ${trueSpd} kn`;
       trueCell =
         `${arrow(relFlow, 'True wind relative to boat', relAngleColor(Math.abs(rel)))} ` +
         `${Math.abs(Math.round(rel))}°${sideLabel(rel)}`;
 
       const app = apparentWind(w.speed, w.dir, speed, s.course);
       const appRelFlow = ((app.flow - s.course) % 360 + 360) % 360;
+      const appSpd = w.gust != null
+        ? `${speedNum(app.speed)}-${speedNum(apparentWind(w.gust, w.dir, speed, s.course).speed)}`
+        : speedNum(app.speed);
       appCell =
         `${arrow(appRelFlow, 'Apparent wind relative to boat', relAngleColor(Math.abs(app.rel)))} ` +
-        `${Math.abs(Math.round(app.rel))}°${sideLabel(app.rel)} · ${speedNum(app.speed)} kn`;
+        `${Math.abs(Math.round(app.rel))}°${sideLabel(app.rel)} · ${appSpd} kn`;
     }
 
     rows +=
