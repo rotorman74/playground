@@ -158,24 +158,25 @@ input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .results-head h2 { margin: 0; font-size: 18px; }
 .results-meta { color: var(--muted); font-size: 13px; }
 
+.col-legend {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.3px;
+}
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
-td { font-variant-numeric: tabular-nums; }
-tbody tr:hover { background: rgba(43, 179, 255, 0.06); }
-.speed-cell { font-weight: 600; color: var(--accent); }
-.nights-badge {
-  display: inline-block;
-  min-width: 22px;
-  text-align: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(91, 108, 255, 0.18);
-  color: #aeb6ff;
-  font-size: 13px;
+td {
+  text-align: left;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
 }
-.nights-badge.zero { background: rgba(52, 211, 153, 0.16); color: var(--ok); }
+tbody tr:hover { background: rgba(43, 179, 255, 0.06); }
+.speed-cell { font-weight: 600; color: var(--accent); width: 1%; }
+.days-cell { width: 1%; }
 .empty-row td { color: var(--muted); text-align: center; padding: 24px; }
 
 .leaflet-container { font: inherit; }

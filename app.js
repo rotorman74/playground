@@ -57,18 +57,6 @@ function greatCircleNM(a, b) {
 }
 
 // ── Time helpers ───────────────────────────────────────────────────
-function formatDuration(hours) {
-  const totalMin = Math.round(hours * 60);
-  const d = Math.floor(totalMin / 1440);
-  const h = Math.floor((totalMin % 1440) / 60);
-  const m = totalMin % 60;
-  const parts = [];
-  if (d) parts.push(`${d}d`);
-  if (h || d) parts.push(`${h}h`);
-  parts.push(`${m}m`);
-  return parts.join(' ');
-}
-
 function formatETA(date) {
   return date.toLocaleString(undefined, {
     weekday: 'short',
@@ -135,7 +123,7 @@ function recalculate() {
 
   if (distance === null) {
     body.innerHTML =
-      '<tr class="empty-row"><td colspan="4">Enter a distance, or set start &amp; destination on the map.</td></tr>';
+      '<tr class="empty-row"><td colspan="3">Enter a distance, or set start &amp; destination on the map.</td></tr>';
     els.resultsMeta.textContent = '';
     return;
   }
@@ -146,14 +134,17 @@ function recalculate() {
   for (const speed of speedList()) {
     const hours = distance / speed;
     const eta = new Date(departure.getTime() + hours * 3600 * 1000);
-    const nights = countNights(departure, eta);
+    const days = countNights(departure, eta); // calendar days advanced to arrival
+    const arrivalTime = eta.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
 
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td class="speed-cell">${speed.toFixed(1)} kn</td>
-      <td>${formatDuration(hours)}</td>
-      <td>${formatETA(eta)}</td>
-      <td><span class="nights-badge${nights === 0 ? ' zero' : ''}">${nights}</span></td>`;
+      <td class="speed-cell">${speed.toFixed(1)}</td>
+      <td class="days-cell">${days}</td>
+      <td>${arrivalTime}</td>`;
     body.appendChild(tr);
   }
 }
