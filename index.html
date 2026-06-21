@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sailing ETA Calculator</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <h1>⛵ Sailing ETA Calculator</h1>
+    <p class="tagline">Estimated arrival times across a range of speeds, with nights at sea.</p>
+  </header>
+
+  <main class="layout">
+    <!-- ── Controls ─────────────────────────────────────────── -->
+    <section class="panel controls" aria-label="Inputs">
+      <!-- Distance source -->
+      <fieldset>
+        <legend>Distance</legend>
+        <div class="seg" role="tablist" aria-label="Distance input mode">
+          <button type="button" class="seg-btn active" data-mode="manual" role="tab">Enter distance</button>
+          <button type="button" class="seg-btn" data-mode="map" role="tab">Use map</button>
+        </div>
+
+        <!-- Manual distance -->
+        <div id="manual-pane" class="pane">
+          <label class="field">
+            <span>Distance (NM)</span>
+            <input type="number" id="distance" min="0" step="0.1" value="120" />
+          </label>
+        </div>
+
+        <!-- Map-based distance -->
+        <div id="map-pane" class="pane hidden">
+          <div class="field-group">
+            <div class="field-group-head">
+              <span>Start position</span>
+              <label class="chk">
+                <input type="checkbox" id="use-current" />
+                <span>Use current location</span>
+              </label>
+            </div>
+            <div class="coord-row">
+              <input type="number" id="start-lat" placeholder="Latitude" step="0.000001" />
+              <input type="number" id="start-lng" placeholder="Longitude" step="0.000001" />
+            </div>
+            <p class="gps-status" id="gps-status" hidden></p>
+          </div>
+
+          <div class="field-group">
+            <div class="field-group-head">
+              <span>Destination</span>
+            </div>
+            <div class="coord-row">
+              <input type="number" id="dest-lat" placeholder="Latitude" step="0.000001" />
+              <input type="number" id="dest-lng" placeholder="Longitude" step="0.000001" />
+            </div>
+          </div>
+
+          <div class="map-set">
+            <span>Click map sets:</span>
+            <label class="radio"><input type="radio" name="setpoint" value="start" /> Start</label>
+            <label class="radio"><input type="radio" name="setpoint" value="dest" checked /> Destination</label>
+          </div>
+
+          <p class="computed" id="computed-distance">Great-circle distance: —</p>
+        </div>
+      </fieldset>
+
+      <!-- Departure -->
+      <fieldset>
+        <legend>Departure</legend>
+        <div class="seg" role="tablist" aria-label="Departure time mode">
+          <button type="button" class="seg-btn active" data-dep="now" role="tab">Now</button>
+          <button type="button" class="seg-btn" data-dep="future" role="tab">Future time</button>
+        </div>
+        <div id="future-pane" class="pane hidden">
+          <label class="field">
+            <span>Departure date &amp; time</span>
+            <input type="datetime-local" id="departure-time" />
+          </label>
+        </div>
+      </fieldset>
+
+      <!-- Speed range -->
+      <fieldset>
+        <legend>Speed range (knots)</legend>
+        <div class="coord-row three">
+          <label class="field">
+            <span>Min</span>
+            <input type="number" id="speed-min" min="0.1" step="0.1" value="3" />
+          </label>
+          <label class="field">
+            <span>Max</span>
+            <input type="number" id="speed-max" min="0.1" step="0.1" value="9" />
+          </label>
+          <label class="field">
+            <span>Step</span>
+            <input type="number" id="speed-step" min="0.1" step="0.1" value="0.5" />
+          </label>
+        </div>
+      </fieldset>
+    </section>
+
+    <!-- ── Map + Results ────────────────────────────────────── -->
+    <section class="panel output">
+      <div id="map" aria-label="Map"></div>
+
+      <div class="results">
+        <div class="results-head">
+          <h2>Estimated arrival</h2>
+          <span class="results-meta" id="results-meta"></span>
+        </div>
+        <div class="table-wrap">
+          <table id="eta-table">
+            <thead>
+              <tr>
+                <th>Speed</th>
+                <th>Duration</th>
+                <th>ETA</th>
+                <th>Nights</th>
+              </tr>
+            </thead>
+            <tbody><!-- rows injected --></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script src="app.js"></script>
+</body>
+</html>
