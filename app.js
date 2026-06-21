@@ -8,7 +8,7 @@
 'use strict';
 
 // Bump this on each release (auto-incremented — see CLAUDE.md).
-const APP_VERSION = '1.8.0';
+const APP_VERSION = '1.9.0';
 const STORAGE_KEY = 'sailing-eta-settings-v2';
 
 // ── State ──────────────────────────────────────────────────────────
@@ -295,27 +295,33 @@ async function ensureWind(samples) {
       `https://marine-api.open-meteo.com/v1/marine?latitude=${lats}&longitude=${lons}` +
       `&hourly=ocean_current_velocity,ocean_current_direction` +
       `&timezone=UTC&start_date=${sd}&end_date=${ed}`;
+    const capeUrl =
+      `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lons}` +
+      `&hourly=cape&timezone=UTC&start_date=${sd}&end_date=${ed}`;
 
     const grab = (u) => fetch(u).then((r) => r.json()).catch(() => null);
-    const [windJson, marineJson] = await Promise.all([grab(windUrl), grab(marineUrl)]);
-    const windArr = windJson ? (Array.isArray(windJson) ? windJson : [windJson]) : [];
-    const marineArr = marineJson ? (Array.isArray(marineJson) ? marineJson : [marineJson]) : [];
+    const [windJson, marineJson, capeJson] = await Promise.all([
+      grab(windUrl), grab(marineUrl), grab(capeUrl),
+    ]);
+    const norm = (j) => (j ? (Array.isArray(j) ? j : [j]) : []);
+    const windArr = norm(windJson);
+    const marineArr = norm(marineJson);
+    const capeArr = norm(capeJson);
 
     chunk.forEach((s, i) => {
       const k = windKey(s.lat, s.lng, s.date);
       const hour = isoHourUTC(s.date);
       let val = null;
+      const ensure = () => (val = val || { speed: null, dir: null, gust: null, cur: null, cape: null });
 
       const wl = windArr[i];
       if (wl && wl.hourly && wl.hourly.time) {
         const idx = wl.hourly.time.indexOf(hour);
         if (idx >= 0) {
-          val = {
-            speed: wl.hourly.wind_speed_10m[idx],
-            dir: wl.hourly.wind_direction_10m[idx],
-            gust: wl.hourly.wind_gusts_10m ? wl.hourly.wind_gusts_10m[idx] : null,
-            cur: null,
-          };
+          ensure();
+          val.speed = wl.hourly.wind_speed_10m[idx];
+          val.dir = wl.hourly.wind_direction_10m[idx];
+          val.gust = wl.hourly.wind_gusts_10m ? wl.hourly.wind_gusts_10m[idx] : null;
         }
       }
 
@@ -325,9 +331,16 @@ async function ensureWind(samples) {
         const v = idx >= 0 ? ml.hourly.ocean_current_velocity[idx] : null;
         const d = idx >= 0 ? ml.hourly.ocean_current_direction[idx] : null;
         if (v != null && d != null) {
-          if (!val) val = { speed: null, dir: null, gust: null, cur: null };
+          ensure();
           val.cur = { speed: v * KMH_TO_KN, dir: d }; // dir = set (toward), km/h → kn
         }
+      }
+
+      const cl = capeArr[i];
+      if (cl && cl.hourly && cl.hourly.time) {
+        const idx = cl.hourly.time.indexOf(hour);
+        const c = idx >= 0 ? cl.hourly.cape[idx] : null;
+        if (c != null) { ensure(); val.cape = c; }
       }
 
       windCache.set(k, val);
@@ -391,6 +404,14 @@ function sideLabel(rel) {
   return rel === 0 || Math.abs(rel) === 180 ? '' : rel > 0 ? ' S' : ' P';
 }
 
+// CAPE (J/kg) colour — convective/thunderstorm potential.
+function capeColor(c) {
+  if (c < 300) return '#2bb24a';   // little / none
+  if (c < 1000) return '#ffd23f';  // marginal
+  if (c < 2500) return '#ff9f1c';  // moderate
+  return '#e23b3b';                // strong
+}
+
 // Build the expandable per-speed wind detail row.
 function buildDetailRow(speed, distance, departure) {
   const samples = sampleRoute(speed, distance, departure);
@@ -414,6 +435,7 @@ function buildDetailRow(speed, distance, departure) {
     let trueCell = '';
     let appCell = '';
     let curCell = '';
+    let capeCell = '';
     if (w === null) {
       windCell = '<span class="muted">n/a</span>';
     } else {
@@ -426,7 +448,7 @@ function buildDetailRow(speed, distance, departure) {
           : speedNum(w.speed);
         windCell =
           `${arrow(flow, 'Wind blowing toward', windSpeedColor(w.speed))} ` +
-          `${Math.round(w.dir)}° · ${trueSpd} kn`;
+          `${Math.round(w.dir)}° · ${trueSpd}`;
         trueCell =
           `${arrow(relFlow, 'True wind relative to boat', relAngleColor(Math.abs(rel)))} ` +
           `${Math.abs(Math.round(rel))}°${sideLabel(rel)}`;
@@ -438,7 +460,7 @@ function buildDetailRow(speed, distance, departure) {
           : speedNum(app.speed);
         appCell =
           `${arrow(appRelFlow, 'Apparent wind relative to boat', relAngleColor(Math.abs(app.rel)))} ` +
-          `${Math.abs(Math.round(app.rel))}°${sideLabel(app.rel)} · ${appSpd} kn`;
+          `${Math.abs(Math.round(app.rel))}°${sideLabel(app.rel)} · ${appSpd}`;
       } else {
         windCell = '<span class="muted">n/a</span>';
       }
@@ -451,8 +473,12 @@ function buildDetailRow(speed, distance, departure) {
         const effColor = along >= 0 ? '#2bb24a' : '#e23b3b';
         curCell =
           `${arrow(w.cur.dir, 'Current set (toward)', '#3bd6c6')} ` +
-          `${Math.round(w.cur.dir)}° · ${w.cur.speed.toFixed(1)} kn ` +
+          `${Math.round(w.cur.dir)}° · ${w.cur.speed.toFixed(1)} ` +
           `<span style="color:${effColor}">${eff}</span>`;
+      }
+
+      if (w.cape != null) {
+        capeCell = `<span style="color:${capeColor(w.cape)};font-weight:700">${Math.round(w.cape)}</span>`;
       }
     }
 
@@ -462,13 +488,15 @@ function buildDetailRow(speed, distance, departure) {
       `<td>${windCell}</td>` +
       `<td>${trueCell}</td>` +
       `<td>${appCell}</td>` +
-      `<td>${curCell}</td></tr>`;
+      `<td>${curCell}</td>` +
+      `<td>${capeCell}</td></tr>`;
   }
 
   td.innerHTML =
     `<div class="wind-scroll"><table class="wind-table"><thead><tr>` +
-    `<th>day · time</th><th>course</th><th>wind (true)</th>` +
-    `<th>true ∠ (bow↑)</th><th>app ∠ (bow↑)</th><th>current (set)</th>` +
+    `<th>day · time</th><th>course</th><th>wind true (kn)</th>` +
+    `<th>true ∠ (bow↑)</th><th>app ∠ · kn</th><th>current set · kn</th>` +
+    `<th>CAPE</th>` +
     `</tr></thead><tbody>${rows}</tbody></table></div>`;
   tr.appendChild(td);
   return tr;
